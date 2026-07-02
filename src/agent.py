@@ -22,7 +22,7 @@ from typing import Any, AsyncGenerator
 import psycopg2
 import psycopg2.extras
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from openai.types.chat import ChatCompletionMessageParam
 
 from .config import settings
 
@@ -436,8 +436,6 @@ async def triage_symptoms(
         ``follow_up_question`` (may be ``None``), ``clinical_summary``.
     """
     client = _get_openai()
-
-    from openai.types.chat import ChatCompletionMessageParam
 
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": settings.TRIAGE_SYSTEM_PROMPT},
@@ -935,7 +933,6 @@ async def run_triage_pipeline(
     patient_id: str,
     message: str,
     conversation_history: list[dict[str, str]] | None = None,
-    follow_up_rounds: int = 0,  # Kept for compatibility with api.py
 ) -> dict[str, Any]:
 
     clean_text = deidentify_text(message)

@@ -50,12 +50,6 @@ class Settings:
     DATABASE_URL: str = os.environ["DATABASE_URL"]
 
     # ------------------------------------------------------------------
-    # Supabase (REST / Realtime client)
-    # ------------------------------------------------------------------
-    SUPABASE_URL: str = os.environ["SUPABASE_URL"]
-    SUPABASE_KEY: str = os.environ["SUPABASE_KEY"]
-
-    # ------------------------------------------------------------------
     # Langfuse observability
     # ------------------------------------------------------------------
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
@@ -78,9 +72,6 @@ class Settings:
     # Minutes before a PENDING queue item is marked TIMEOUT
     QUEUE_SLA_MINUTES: int = int(os.getenv("QUEUE_SLA_MINUTES", "3"))
 
-    # Number of follow-up rounds the chatbot asks before escalating to nurse
-    MAX_FOLLOWUP_ROUNDS: int = int(os.getenv("MAX_FOLLOWUP_ROUNDS", "3"))
-
     # ------------------------------------------------------------------
     # Rate limiting
     # ------------------------------------------------------------------
@@ -99,13 +90,6 @@ class Settings:
         ).split(",")
         if origin.strip()
     ]
-
-    # ------------------------------------------------------------------
-    # Presidio / spaCy
-    # ------------------------------------------------------------------
-    # spaCy model used by Presidio for NER.
-    # Falls back gracefully if the large model is not installed.
-    SPACY_MODEL: str = os.getenv("SPACY_MODEL", "en_core_web_lg")
 
     # ------------------------------------------------------------------
     # Red-flag keywords (Vietnamese emergency terms)

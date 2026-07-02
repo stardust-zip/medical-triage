@@ -27,13 +27,13 @@ class TriageFlow(str, Enum):
     """AI confidence ≥ 85 – routed automatically, no human needed."""
 
     PENDING_HUMAN = "PENDING_HUMAN"
-    """AI confidence < 85 after MAX_FOLLOWUP_ROUNDS – queued for nurse review."""
+    """Agent escalated (low confidence / ambiguous symptoms) – queued for nurse review."""
 
     EMERGENCY = "EMERGENCY"
     """Red-flag similarity > 0.85 – bypass LLM, trigger 115 emergency flow."""
 
     FOLLOW_UP = "FOLLOW_UP"
-    """AI confidence < 85 but follow-up rounds not exhausted – chatbot asks more."""
+    """Agent needs more info from the patient before it can route or escalate."""
 
 
 class ResolutionType(str, Enum):
@@ -79,15 +79,6 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional conversation session UUID for multi-turn chat tracking.",
         examples=["550e8400-e29b-41d4-a716-446655440000"],
-    )
-    follow_up_rounds: int = Field(
-        default=0,
-        ge=0,
-        description=(
-            "Number of follow-up rounds already completed in this session. "
-            "Incremented by the frontend after each FOLLOW_UP response. "
-            "Once ≥ MAX_FOLLOWUP_ROUNDS the pipeline escalates to PENDING_HUMAN."
-        ),
     )
     conversation_history: list[dict[str, str]] = Field(
         default_factory=list,

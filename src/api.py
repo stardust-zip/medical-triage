@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import psutil
+import psycopg2
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -29,7 +30,6 @@ from langfuse import get_client, observe
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from sqlalchemy import create_engine, text
 
 from .agent import (
     create_appointment,
@@ -223,10 +223,9 @@ def health_check():
 
     db_status = "disconnected"
     try:
-        db_url = settings.DATABASE_URL
-        engine = create_engine(db_url)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        with psycopg2.connect(settings.DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
         db_status = "connected"
     except Exception as exc:  # noqa: BLE001
         db_status = f"error: {exc}"
@@ -353,7 +352,6 @@ async def chat_triage(
         patient_id=body.patient_id,
         message=body.message,
         conversation_history=body.conversation_history or [],
-        follow_up_rounds=body.follow_up_rounds,
     )
 
     flow_str: str = pipeline_result.get("flow", "PENDING_HUMAN")
