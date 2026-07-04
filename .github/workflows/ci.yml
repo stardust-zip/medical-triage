@@ -48,17 +48,7 @@ jobs:
       - name: Test Python
         run: pytest
 
-  # Phase 2 (Safety-Critical AI Hardening): automated red-flag recall/
-  # precision eval + prompt-injection regression tests against the real
-  # embedding/chat model (tests/test_red_flag_eval.py,
-  # tests/test_injection_regression.py). The fake per-job OPENAI_API_KEY
-  # from write_ci_env.sh can't produce real model output, so these are
-  # skipped in the `python` job above and only run here, fed a real key from
-  # the EVAL_OPENAI_API_KEY repo secret.
-  #
-  # KNOWN GAP: until that secret is added, this job's tests are collected
-  # but skipped (a green, vacuous pass) — add the secret and mark this job
-  # required in branch protection to make it actually gate merges.
+  # Live-LLM eval suite; needs the EVAL_OPENAI_API_KEY secret or it skips.
   redflag-eval:
     runs-on: ubuntu-latest
     services:
@@ -94,11 +84,6 @@ jobs:
       - name: Apply database migrations
         run: python scripts/migrate.py
 
-      # `secrets` isn't a valid context in step `if:` conditions (only in
-      # `env:`/`with:`), so this always runs — falling back to an empty
-      # OPENAI_API_KEY when EVAL_OPENAI_API_KEY isn't configured, which
-      # tests/_eval_support.py::has_real_openai_key() treats the same as a
-      # missing key: the eval suite skips itself instead of failing.
       - name: Use real OpenAI key for the eval suite (if configured)
         env:
           EVAL_OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}

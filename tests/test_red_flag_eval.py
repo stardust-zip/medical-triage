@@ -1,28 +1,6 @@
-"""
-Automated red-flag recall/precision eval (Phase 2 of
-docs/architecture/implementation-plan.md: "Automated red-flag
-recall/precision eval suite in CI, gating merges", target >99.5% recall).
-
-Exercises the real embedding pipeline (src.agent.check_red_flags) against a
-curated, labeled dataset of Vietnamese symptom phrasings — paraphrases of
-every seeded red-flag keyword, never the keyword verbatim, plus clearly
-benign negatives — and asserts the spec's recall/precision targets.
-
-Requires a real OPENAI_API_KEY: the fake per-job key CI normally generates
-(scripts/write_ci_env.sh) can't produce real embeddings, so this module is
-skipped unless a real key is present (see tests/_eval_support.py). CI wires
-this in as a separate `redflag-eval` job (.github/workflows/ci.yml) fed from
-the `EVAL_OPENAI_API_KEY` repository secret — add that secret and mark the
-job required in branch protection to make it actually gate merges; until
-then the job passes vacuously (skipped), which is a known, visible gap for
-whoever owns that repo setting to close, not a silent one.
-
-ponytail: no fake/offline embedding stand-in here — a stubbed similarity
-function would validate the threshold arithmetic (already covered by
-tests/test_red_flag_failsafe.py), not the thing this eval exists to catch:
-semantic drift in the real embedding model. The trade-off is that this
-suite only runs where a real key is configured.
-"""
+"""Red-flag recall/precision eval against the real embedding pipeline.
+Requires a real OPENAI_API_KEY (skipped otherwise — see _eval_support.py);
+CI runs this in the `redflag-eval` job."""
 
 from __future__ import annotations
 
@@ -38,9 +16,7 @@ from _eval_support import requires_real_openai_key
 
 pytestmark = requires_real_openai_key
 
-# Positive cases: natural paraphrases of the 15 seeded keywords a patient
-# might actually type — deliberately not the keyword verbatim, since that
-# would test string matching more than semantic matching.
+# Paraphrases of the 15 seeded keywords, not verbatim (tests semantic match).
 POSITIVE_CASES = [
     ("tự nhiên đau nhói ngực trái như bị bóp nghẹt", "đau thắt ngực"),
     ("ngực đau dữ dội, vã mồ hôi lạnh, khó thở", "nhồi máu cơ tim"),
@@ -59,8 +35,7 @@ POSITIVE_CASES = [
     ("ngủ li bì gọi mãi không dậy, thở yếu", "hôn mê"),
 ]
 
-# Negative cases: everyday, clearly non-emergency symptoms across several
-# departments. Must NOT trip the red-flag threshold.
+# Benign symptoms that must NOT trip the red-flag threshold.
 NEGATIVE_CASES = [
     "hắt hơi sổ mũi nhẹ hai ngày nay",
     "đau bụng âm ỉ sau khi ăn đồ lạnh",
@@ -94,10 +69,7 @@ def test_red_flag_recall_meets_target(seeded_conn):
     misses = [m for m in misses if m[2] != "EMERGENCY"]
 
     recall = 1 - len(misses) / len(POSITIVE_CASES)
-    # With this dataset's size, hitting the spec's 99.5% target requires
-    # zero misses — there's no statistical middle ground between one miss
-    # and missing the target outright at N=15. That's intentional: it's the
-    # practical equivalent of the production target at demo scale.
+    # N=15 means 99.5% recall requires zero misses.
     assert recall >= 0.995, f"Recall {recall:.1%} below target; misses: {misses}"
 
 

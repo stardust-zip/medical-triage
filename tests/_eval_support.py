@@ -1,14 +1,6 @@
-"""
-Shared helpers for the live-LLM eval suite (tests/test_red_flag_eval.py,
-tests/test_injection_regression.py).
-
-Both of those files exercise the *real* OpenAI API, so they're skipped
-unless a real key is configured — see their module docstrings for why a
-fake/offline stand-in wouldn't test the thing they exist to catch.
-
-Leading underscore keeps pytest from collecting this file as a test module
-in its own right.
-"""
+"""Shared helpers for the live-LLM eval suite (test_red_flag_eval.py,
+test_injection_regression.py). Leading underscore keeps pytest from
+collecting this as a test module."""
 
 from __future__ import annotations
 
@@ -19,9 +11,7 @@ import pytest
 
 from src.config import settings
 
-# The per-job key CI generates for the regular test suite (write_ci_env.sh)
-# and the local-dev default (tests/conftest.py) both use these prefixes.
-_PLACEHOLDER_PREFIXES = ("test-", "ci-")
+_PLACEHOLDER_PREFIXES = ("test-", "ci-")  # fake keys from conftest.py / write_ci_env.sh
 
 
 def has_real_openai_key() -> bool:

@@ -1,15 +1,6 @@
-"""
-Regression tests for the Phase 2 fail-safe fix to the emergency red-flag
-check (docs/architecture/implementation-plan.md, "Fail-safe (not fail-open)
-emergency-check error handling").
-
-These are fully offline: the OpenAI embedding call and the DB connection are
-both faked, so no network access or real API key is required. That's a
-deliberate scope split from tests/test_red_flag_eval.py, which needs a real
-embedding model to judge semantic *quality* — this file only needs to prove
-that when the check can't run, the pipeline doesn't quietly behave as if it
-had passed.
-"""
+"""Offline regression tests for the fail-safe emergency check (see
+src/agent.py::check_red_flags). No network/API key needed — that's
+tests/test_red_flag_eval.py's job."""
 
 from __future__ import annotations
 

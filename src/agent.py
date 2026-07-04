@@ -288,12 +288,7 @@ async def get_embedding(text: str) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-# A medical safety check has exactly three honest outcomes: a real red flag
-# fired, a real red flag did not fire, or the check itself couldn't be
-# completed. Collapsing the third case into "did not fire" (fail-open) is
-# the bug this type exists to make impossible to reintroduce by accident —
-# every caller must handle CHECK_FAILED explicitly instead of it silently
-# behaving like SAFE.
+# Fail-safe, not fail-open: CHECK_FAILED must never collapse into SAFE.
 RedFlagStatus = Literal["EMERGENCY", "SAFE", "CHECK_FAILED"]
 
 
@@ -304,29 +299,11 @@ async def check_red_flags(
     """
     Check whether *symptoms_text* semantically matches any red-flag keyword.
 
-    Embeds the symptoms text and performs a pgvector cosine-similarity query
-    against the ``red_flags`` table.  Returns ``"EMERGENCY"`` if the top-1
-    similarity exceeds ``settings.RED_FLAG_SIMILARITY_THRESHOLD``.
-
-    Fails *safe*, not open: any error that prevents the check from actually
-    running (embedding API failure, DB error, an empty/unseeded red_flags
-    table) is reported as ``"CHECK_FAILED"``, never as ``"SAFE"``. Callers
-    must treat ``"CHECK_FAILED"`` with the same urgency as ``"EMERGENCY"`` —
-    see ``run_triage_pipeline``.
-
-    Parameters
-    ----------
-    symptoms_text:
-        Cleaned symptom text (already de-identified).
-    conn:
-        Active psycopg2 connection to the Supabase/Postgres database.
-
-    Returns
-    -------
-    tuple[RedFlagStatus, str, float]
-        ``(status, matched_keyword, similarity_score)``. ``matched_keyword``
-        and ``similarity_score`` are only meaningful when ``status`` is
-        ``"EMERGENCY"`` or ``"SAFE"``.
+    Returns ``"EMERGENCY"`` if the top-1 cosine similarity against the
+    ``red_flags`` table exceeds ``settings.RED_FLAG_SIMILARITY_THRESHOLD``,
+    ``"SAFE"`` otherwise, or ``"CHECK_FAILED"`` if the check couldn't run at
+    all (embedding/DB error, empty table) — callers must treat that the same
+    as ``"EMERGENCY"``, see ``run_triage_pipeline``.
     """
     try:
         embedding = await get_embedding(symptoms_text)
@@ -346,9 +323,6 @@ async def check_red_flags(
             row = cur.fetchone()
 
         if row is None:
-            # An empty red_flags table means the safety net was never
-            # seeded — the check ran but could never have caught anything.
-            # That's a "couldn't verify", not a "verified safe".
             logger.error(
                 "red_flags table is empty – emergency check cannot run; "
                 "failing safe."
@@ -369,8 +343,6 @@ async def check_red_flags(
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Red-flag check failed: %s", exc, exc_info=True)
-        # Fail safe – an error here means we don't know if this is an
-        # emergency, so we must not tell the pipeline it's safe to proceed.
         return "CHECK_FAILED", "", 0.0
 
 
@@ -1046,16 +1018,12 @@ async def run_triage_pipeline(
                         args["symptoms"], conn
                     )
                 else:
-                    # No DB connection means the check can't run at all —
-                    # same fail-safe outcome as any other check failure.
                     check_status, keyword, sim = "CHECK_FAILED", "", 0.0
 
                 if check_status in ("EMERGENCY", "CHECK_FAILED"):
                     if check_status == "CHECK_FAILED":
                         logger.error(
-                            "Emergency check failed for org=%s patient=%s — "
-                            "failing safe to the EMERGENCY flow instead of "
-                            "letting the agent continue unverified.",
+                            "Emergency check failed for org=%s patient=%s — failing safe",
                             org_id,
                             patient_id,
                         )
