@@ -76,7 +76,8 @@ func handleAnonymousSession(cfg config) http.HandlerFunc {
 // requirePatientSession verifies the Authorization bearer token is a
 // gateway-issued patient session, then forwards org_id/patient_session_id as
 // headers the backend trusts. The client never gets to set these directly —
-// trustedDirector already strips any client-supplied copies.
+// stripClientIdentityHeaders (main.go) already strips any client-supplied
+// copies before this even runs.
 func requirePatientSession(cfg config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r)
@@ -98,48 +99,84 @@ func requirePatientSession(cfg config, next http.Handler) http.Handler {
 
 // --- Staff sessions -------------------------------------------------------
 
+// resolveStaff verifies token as a Supabase-issued staff access token,
+// resolves it to a tenant + role via identity-service, and checks the role
+// is one of roleAllowed. On any failure it writes the 401/403 itself and
+// returns ok=false — shared by requireStaff and requireStaffWS below, which
+// only differ in *where* the token comes from.
+func resolveStaff(cfg config, w http.ResponseWriter, token string, roleAllowed map[string]bool) (userLookup, bool) {
+	if token == "" {
+		writeUnauthorized(w, "missing staff bearer token")
+		return userLookup{}, false
+	}
+	claims, err := verifyHS256(token, cfg.supabaseJWTSecret)
+	if err != nil {
+		writeUnauthorized(w, "invalid or expired token")
+		return userLookup{}, false
+	}
+	authUserID := claims.str("sub")
+	if authUserID == "" {
+		writeUnauthorized(w, "token missing subject")
+		return userLookup{}, false
+	}
+
+	user, err := cfg.identity.userByAuthID(authUserID)
+	if err != nil {
+		writeForbidden(w, "no tenant membership for this account")
+		return userLookup{}, false
+	}
+	if !roleAllowed[user.Role] {
+		writeForbidden(w, "role does not permit this action")
+		return userLookup{}, false
+	}
+	return user, true
+}
+
+func setStaffHeaders(r *http.Request, user userLookup) {
+	r.Header.Set("X-Org-Id", user.OrgID)
+	r.Header.Set("X-User-Id", user.UserID)
+	r.Header.Set("X-User-Role", user.Role)
+	r.Header.Set("X-User-Email", user.Email)
+}
+
+func rolesSet(roles []string) map[string]bool {
+	set := make(map[string]bool, len(roles))
+	for _, role := range roles {
+		set[role] = true
+	}
+	return set
+}
+
 // requireStaff verifies the Authorization bearer token is a valid Supabase
 // access token, resolves it to a tenant + role via identity-service, and
 // rejects the request unless the role is in allowedRoles. nurse_id and org_id
 // on downstream resolve actions therefore always come from this verified
 // identity, never from the request body.
 func requireStaff(cfg config, next http.Handler, allowedRoles ...string) http.Handler {
-	roleAllowed := make(map[string]bool, len(allowedRoles))
-	for _, role := range allowedRoles {
-		roleAllowed[role] = true
-	}
-
+	roleAllowed := rolesSet(allowedRoles)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := bearerToken(r)
+		token, _ := bearerToken(r)
+		user, ok := resolveStaff(cfg, w, token, roleAllowed)
 		if !ok {
-			writeUnauthorized(w, "missing staff bearer token")
 			return
 		}
-		claims, err := verifyHS256(token, cfg.supabaseJWTSecret)
-		if err != nil {
-			writeUnauthorized(w, "invalid or expired token")
-			return
-		}
-		authUserID := claims.str("sub")
-		if authUserID == "" {
-			writeUnauthorized(w, "token missing subject")
-			return
-		}
+		setStaffHeaders(r, user)
+		next.ServeHTTP(w, r)
+	})
+}
 
-		user, err := cfg.identity.userByAuthID(authUserID)
-		if err != nil {
-			writeForbidden(w, "no tenant membership for this account")
+// requireStaffWS is requireStaff for the one route a bearer header can't
+// reach: a browser WebSocket handshake is a plain GET with no way to set
+// Authorization, so the frontend passes the staff token as ?token=... and
+// this reads it from there instead — everything else is identical.
+func requireStaffWS(cfg config, next http.Handler, allowedRoles ...string) http.Handler {
+	roleAllowed := rolesSet(allowedRoles)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := resolveStaff(cfg, w, r.URL.Query().Get("token"), roleAllowed)
+		if !ok {
 			return
 		}
-		if !roleAllowed[user.Role] {
-			writeForbidden(w, "role does not permit this action")
-			return
-		}
-
-		r.Header.Set("X-Org-Id", user.OrgID)
-		r.Header.Set("X-User-Id", user.UserID)
-		r.Header.Set("X-User-Role", user.Role)
-		r.Header.Set("X-User-Email", user.Email)
+		setStaffHeaders(r, user)
 		next.ServeHTTP(w, r)
 	})
 }

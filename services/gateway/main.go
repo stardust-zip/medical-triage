@@ -25,6 +25,7 @@ import (
 type config struct {
 	port                 string
 	backendURL           *url.URL
+	queueServiceURL      *url.URL
 	identity             *identityClient
 	supabaseJWTSecret    string
 	patientSessionSecret string
@@ -37,10 +38,15 @@ func loadConfig() config {
 	if err != nil {
 		log.Fatalf("invalid BACKEND_URL: %v", err)
 	}
+	queueService, err := url.Parse(getenv("QUEUE_SERVICE_URL", "http://localhost:8083"))
+	if err != nil {
+		log.Fatalf("invalid QUEUE_SERVICE_URL: %v", err)
+	}
 
 	return config{
 		port:                 getenv("PORT", "8080"),
 		backendURL:           backend,
+		queueServiceURL:      queueService,
 		identity:             newIdentityClient(getenv("IDENTITY_URL", "http://localhost:8082"), mustGetenv("INTERNAL_SHARED_SECRET")),
 		supabaseJWTSecret:    mustGetenv("SUPABASE_JWT_SECRET"),
 		patientSessionSecret: mustGetenv("PATIENT_SESSION_SECRET"),
@@ -68,7 +74,12 @@ func main() {
 	cfg := loadConfig()
 
 	proxy := httputil.NewSingleHostReverseProxy(cfg.backendURL)
-	proxy.Director = trustedDirector(cfg, proxy.Director)
+	proxy.Director = withGatewaySecret(cfg, proxy.Director)
+
+	// queue-service owns human_triage_queue as of Phase 3 — the monolith no
+	// longer serves these routes at all (see src/api.py).
+	queueProxy := httputil.NewSingleHostReverseProxy(cfg.queueServiceURL)
+	queueProxy.Director = withGatewaySecret(cfg, queueProxy.Director)
 
 	mux := http.NewServeMux()
 
@@ -80,41 +91,61 @@ func main() {
 	mux.Handle("POST /api/v1/appointments", requirePatientSession(cfg, proxy))
 
 	// Staff-facing: require a valid Supabase JWT + resolved tenant/role.
-	mux.Handle("GET /api/v1/queue/pending", requireStaff(cfg, proxy, "NURSE", "ADMIN", "OWNER"))
-	mux.Handle("POST /api/v1/queue/resolve", requireStaff(cfg, proxy, "NURSE", "ADMIN", "OWNER"))
-	mux.Handle("POST /api/v1/queue/check-timeouts", requireStaff(cfg, proxy, "NURSE", "ADMIN", "OWNER"))
+	mux.Handle("GET /api/v1/queue/pending", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))
+	mux.Handle("POST /api/v1/queue/resolve", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))
+	mux.Handle("POST /api/v1/queue/check-timeouts", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))
 	mux.Handle("POST /api/v1/admin/seed-red-flags", requireStaff(cfg, proxy, "ADMIN", "OWNER"))
+
+	// Nurse dashboard live updates. Browsers can't set a custom Authorization
+	// header on a WebSocket handshake, so the staff token travels as a query
+	// param here instead — requireStaffWS is the same checks as requireStaff,
+	// just reading the token from a different place.
+	mux.Handle("GET /ws/queue", requireStaffWS(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))
 
 	// Unauthenticated passthrough (meta endpoints only).
 	mux.Handle("GET /", proxy)
 	mux.Handle("GET /health", proxy)
 
-	handler := withCORS(cfg, mux)
+	// stripClientIdentityHeaders must run before any auth middleware or
+	// route handler sees the request — see its doc comment below for why.
+	handler := withCORS(cfg, stripClientIdentityHeaders(mux))
 
 	log.Printf("api-gateway listening on :%s -> backend %s", cfg.port, cfg.backendURL)
 	log.Fatal(http.ListenAndServe(":"+cfg.port, handler))
 }
 
-// trustedDirector wraps the default reverse-proxy director so every request
-// has its trust-boundary headers scrubbed before anything else runs. Actual
-// identity headers are added by the auth middlewares below via context, not
-// here — this only guarantees a bypass of those middlewares (e.g. hitting
-// "/" which has no auth) can't smuggle a forged identity through either.
-func trustedDirector(cfg config, base func(*http.Request)) func(*http.Request) {
+// stripClientIdentityHeaders removes any identity headers the caller sent
+// themselves, before the request reaches routing or auth. This has to run
+// as the outermost wrapper around the whole mux, not inside a proxy's
+// Director: a Director only fires once a request has already matched a
+// route and passed that route's auth middleware — running the strip there
+// would wipe out the *trusted* values requireStaff/requirePatientSession
+// just set, not just client-forged ones (see auth_test.go's regression test
+// for the bug this used to be). Doing it here instead means every route,
+// including ones with no auth at all (e.g. "/"), can never have a forged
+// X-Org-Id etc. reach a backend.
+func stripClientIdentityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del("X-Org-Id")
+		r.Header.Del("X-User-Id")
+		r.Header.Del("X-User-Role")
+		r.Header.Del("X-User-Email")
+		r.Header.Del("X-Patient-Session-Id")
+		r.Header.Del("X-Gateway-Secret")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withGatewaySecret wraps a reverse-proxy Director to attach the shared
+// secret every downstream service checks (see requireGatewaySecret in
+// src/context.py and requireInternalSecret's staff-route counterpart in
+// services/queue/auth.go) — proving a request actually came through this
+// gateway rather than hitting a service directly.
+func withGatewaySecret(cfg config, base func(*http.Request)) func(*http.Request) {
 	return func(r *http.Request) {
-		stripIdentityHeaders(r)
 		r.Header.Set("X-Gateway-Secret", cfg.gatewaySharedSecret)
 		base(r)
 	}
-}
-
-func stripIdentityHeaders(r *http.Request) {
-	r.Header.Del("X-Org-Id")
-	r.Header.Del("X-User-Id")
-	r.Header.Del("X-User-Role")
-	r.Header.Del("X-User-Email")
-	r.Header.Del("X-Patient-Session-Id")
-	r.Header.Del("X-Gateway-Secret")
 }
 
 func withCORS(cfg config, next http.Handler) http.Handler {

@@ -133,6 +133,12 @@ CREATE INDEX IF NOT EXISTS idx_triage_logs_org ON triage_logs (org_id);
 -- patient_id holds the anonymous, gateway-issued patient-session id (a UUID),
 -- never client-supplied free text (Phase 1: "patient sessions are anonymous
 -- but token-bound"). Column name kept as-is to avoid unnecessary churn.
+--
+-- triage_log_id (Phase 3): the exact triage_logs row this item was created
+-- from, set once at insert time by queue-service. Fixes the monolith's old
+-- "most recent triage_logs row with a matching department" heuristic in
+-- resolve_queue_item — queue-service's resolver uses this FK directly and
+-- only falls back to the heuristic for pre-Phase-3 rows that lack it.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS human_triage_queue (
@@ -141,6 +147,7 @@ CREATE TABLE IF NOT EXISTS human_triage_queue (
     patient_id       VARCHAR(255) NOT NULL,
     clinical_summary TEXT         NOT NULL,
     suggested_dept   VARCHAR(255),
+    triage_log_id    UUID         REFERENCES triage_logs(id) ON DELETE SET NULL,
     status           queue_status DEFAULT 'PENDING',
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -148,6 +155,9 @@ CREATE TABLE IF NOT EXISTS human_triage_queue (
 -- Index for fast lookup of PENDING items (nurse dashboard polling)
 CREATE INDEX IF NOT EXISTS idx_human_triage_queue_status
     ON human_triage_queue (status, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_human_triage_queue_triage_log_id
+    ON human_triage_queue (triage_log_id);
 
 CREATE INDEX IF NOT EXISTS idx_human_triage_queue_org ON human_triage_queue (org_id);
 

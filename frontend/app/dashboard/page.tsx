@@ -10,9 +10,8 @@ import {
   getDeptName,
   type QueueItem,
 } from "@/lib/api";
+import { subscribeToQueueSocket } from "@/lib/queueSocket";
 import {
-  subscribeToQueue,
-  isSupabaseConfigured,
   signInStaff,
   signOutStaff,
   getStaffSession,
@@ -464,27 +463,19 @@ export default function NurseDashboard() {
   }, [fetchQueue, staffSession]);
 
   // ---------------------------------------------------------------------------
-  // Supabase Realtime
+  // Live queue updates (queue-service's WebSocket hub, Phase 3)
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!staffSession || !isSupabaseConfigured()) return;
+    if (!staffSession) return;
 
-    const cleanup = subscribeToQueue((payload) => {
-      // Any change to the queue → refresh the list
-      if (
-        payload.eventType === "INSERT" ||
-        payload.eventType === "UPDATE"
-      ) {
-        fetchQueue();
-      }
-    });
+    const cleanup = subscribeToQueueSocket(
+      staffSession.accessToken,
+      fetchQueue, // any change → refresh the list
+      setRealtimeActive
+    );
 
-    setRealtimeActive(true);
-    return () => {
-      cleanup();
-      setRealtimeActive(false);
-    };
+    return cleanup;
   }, [fetchQueue, staffSession]);
 
   // ---------------------------------------------------------------------------

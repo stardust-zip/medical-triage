@@ -19,6 +19,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Literal
 
+import httpx
 import psycopg2
 import psycopg2.extras
 from openai import AsyncOpenAI
@@ -623,13 +624,16 @@ async def insert_triage_log(
     raw_symptoms: str,
     symptom_embedding: list[float],
     ai_suggested_dept: str | None,
-    confidence: float,
+    confidence: float | None,
 ) -> str:
     """
     Insert a row into ``triage_logs`` and return the new UUID string.
 
     The ``final_dept`` and ``resolution_type`` columns are left NULL here;
-    they are filled in later by :func:`resolve_queue_item`.
+    they are filled in later when a nurse resolves the linked
+    ``human_triage_queue`` entry (queue-service, Phase 3 — see
+    ``create_queue_item`` below for how the two rows get linked via
+    ``triage_log_id``).
     """
     log_id = str(uuid.uuid4())
     embedding_str = "[" + ",".join(str(x) for x in symptom_embedding) + "]"
@@ -646,158 +650,44 @@ async def insert_triage_log(
     return log_id
 
 
-async def insert_to_queue(
-    conn: Any,
-    patient_id: str,
+async def create_queue_item(
+    org_id: str,
+    patient_session_id: str,
     clinical_summary: str,
     suggested_dept: str | None,
+    triage_log_id: str | None,
 ) -> str:
     """
-    Insert a new ``human_triage_queue`` entry and return its UUID string.
+    Create a ``human_triage_queue`` entry via queue-service's internal API.
 
-    Parameters
-    ----------
-    conn:
-        Active psycopg2 connection (caller handles commit).
-    patient_id:
-        Opaque patient identifier.
-    clinical_summary:
-        Nurse-facing summary text.
-    suggested_dept:
-        Department code the AI proposed (may be ``None``).
+    queue-service (Go) owns human_triage_queue as of Phase 3, so this is a
+    server-to-server call authenticated the same way api-gateway
+    authenticates to identity-service (a shared internal secret) — never
+    routed through api-gateway itself, which only forwards patient/staff
+    traffic, not internal service-to-service calls.
 
-    Returns
-    -------
-    str
-        UUID string of the newly created queue entry.
+    Passing *triage_log_id* is what lets queue-service's resolve handler
+    back-fill the exact originating ``triage_logs`` row later instead of
+    guessing by department match (see docs/architecture/implementation-plan.md
+    §4 and services/queue/db.go::resolveQueueItem).
     """
-    queue_id = str(uuid.uuid4())
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO human_triage_queue
-                (id, org_id, patient_id, clinical_summary, suggested_dept, status)
-            VALUES (%s, current_setting('app.org_id')::uuid, %s, %s, %s, 'PENDING')
-            """,
-            (queue_id, patient_id, clinical_summary, suggested_dept),
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.post(
+            f"{settings.QUEUE_SERVICE_URL}/internal/queue/items",
+            json={
+                "org_id": org_id,
+                "patient_session_id": patient_session_id,
+                "clinical_summary": clinical_summary,
+                "suggested_dept": suggested_dept,
+                "triage_log_id": triage_log_id,
+            },
+            headers={"X-Internal-Secret": settings.INTERNAL_SHARED_SECRET},
         )
+        response.raise_for_status()
+        queue_id: str = response.json()["queue_id"]
 
-    logger.info("Inserted queue entry %s for patient %s", queue_id, patient_id)
+    logger.info("Created queue entry %s for patient %s", queue_id, patient_session_id)
     return queue_id
-
-
-async def resolve_queue_item(
-    conn: Any,
-    queue_id: str,
-    approved_dept: str,
-    resolution_type: str,
-) -> bool:
-    """
-    Mark a ``human_triage_queue`` entry as RESOLVED and back-fill
-    ``triage_logs`` with the nurse's final decision.
-
-    Parameters
-    ----------
-    conn:
-        Active psycopg2 connection.
-    queue_id:
-        UUID of the queue entry to resolve.
-    approved_dept:
-        The department code chosen by the nurse.
-    resolution_type:
-        One of ``NURSE_APPROVED`` / ``NURSE_CORRECTED``.
-
-    Returns
-    -------
-    bool
-        ``True`` if a row was updated, ``False`` if the queue entry was not found.
-    """
-    with conn.cursor() as cur:
-        # Mark queue item resolved
-        cur.execute(
-            """
-            UPDATE human_triage_queue
-            SET    status = 'RESOLVED'
-            WHERE  id = %s AND status = 'PENDING'
-            RETURNING id
-            """,
-            (queue_id,),
-        )
-        updated = cur.fetchone()
-
-        if not updated:
-            return False
-
-        # Back-fill triage_logs – match on the most recent log for this patient
-        # (We join via suggested_dept as a best-effort since we don't store
-        #  queue_id in triage_logs to keep the schema unchanged.)
-        cur.execute(
-            """
-            UPDATE triage_logs
-            SET    final_dept       = %s,
-                   resolution_type  = %s::triage_resolution
-            WHERE  id = (
-                SELECT tl.id
-                FROM   triage_logs tl
-                WHERE  tl.ai_suggested_dept = (
-                    SELECT suggested_dept
-                    FROM   human_triage_queue
-                    WHERE  id = %s
-                )
-                ORDER  BY tl.created_at DESC
-                LIMIT  1
-            )
-            """,
-            (approved_dept, resolution_type, queue_id),
-        )
-
-    return True
-
-
-async def get_pending_queue(conn: Any) -> list[dict[str, Any]]:
-    """
-    Fetch all ``PENDING`` entries from ``human_triage_queue``,
-    ordered oldest-first (highest SLA urgency first).
-    """
-    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        cur.execute(
-            """
-            SELECT id, patient_id, clinical_summary, suggested_dept,
-                   status, created_at
-            FROM   human_triage_queue
-            WHERE  status = 'PENDING'
-            ORDER  BY created_at ASC
-            """
-        )
-        rows = cur.fetchall()
-
-    return [dict(row) for row in rows]
-
-
-async def mark_timed_out_items(conn: Any, sla_minutes: int) -> int:
-    """
-    Mark all ``PENDING`` items older than *sla_minutes* as ``TIMEOUT``.
-
-    Returns
-    -------
-    int
-        Number of rows updated.
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE human_triage_queue
-            SET    status = 'TIMEOUT'
-            WHERE  status = 'PENDING'
-              AND  created_at < NOW() - (%s || ' minutes')::INTERVAL
-            """,
-            (str(sla_minutes),),
-        )
-        count: int = cur.rowcount
-
-    logger.info("SLA timeout sweep: marked %d items as TIMEOUT", count)
-    return count
 
 
 async def seed_red_flags(conn: Any, keywords: list[str]) -> int:
@@ -1040,13 +930,34 @@ async def run_triage_pipeline(
             elif function_name == "escalate_to_human_nurse":
                 result["flow"] = "PENDING_HUMAN"
                 if conn:
-                    result["queue_id"] = await insert_to_queue(
-                        conn,
-                        patient_id,
-                        args["clinical_summary"],
-                        args.get("suggested_dept"),
+                    triage_log_id = None
+                    try:
+                        symptom_embedding = await get_embedding(clean_text)
+                        triage_log_id = await insert_triage_log(
+                            conn,
+                            raw_symptoms=clean_text,
+                            symptom_embedding=symptom_embedding,
+                            ai_suggested_dept=args.get("suggested_dept"),
+                            confidence=None,  # unknown — that's why it escalated
+                        )
+                        conn.commit()
+                    except Exception as exc:  # noqa: BLE001
+                        # Best-effort: the flywheel log is valuable but not
+                        # worth failing the escalation over if it errors.
+                        conn.rollback()
+                        logger.error(
+                            "Failed to log triage_logs row before escalation: %s",
+                            exc,
+                            exc_info=True,
+                        )
+
+                    result["queue_id"] = await create_queue_item(
+                        org_id=org_id,
+                        patient_session_id=patient_id,
+                        clinical_summary=args["clinical_summary"],
+                        suggested_dept=args.get("suggested_dept"),
+                        triage_log_id=triage_log_id,
                     )
-                    conn.commit()
                 tool_result = "Escalated successfully."
                 result["patient_message"] = (
                     "Hệ thống đã ghi nhận triệu chứng. Tôi đang chuyển hồ sơ của bạn cho điều dưỡng chuyên môn để hỗ trợ trực tiếp."
