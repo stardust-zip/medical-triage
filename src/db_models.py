@@ -201,6 +201,7 @@ class Appointment(Base):
     appointment_time: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    idempotency_key: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -211,4 +212,17 @@ class Appointment(Base):
         ),
         Index("idx_appointments_org", "org_id"),
         CheckConstraint("appointment_time IS NOT NULL"),
+        # Phase 4: double-booking prevention + idempotent booking. The
+        # idempotency index is partial (WHERE idempotency_key IS NOT NULL)
+        # in db/init.sql/the migration — SQLAlchemy's Index doesn't need
+        # postgresql_where here since compare_type/autogenerate isn't used
+        # for these raw-SQL-driven migrations, but the columns still need
+        # to exist on the model for it to be a faithful mirror of the DB.
+        Index(
+            "idx_appointments_no_double_booking",
+            "org_id",
+            "doctor_id",
+            "appointment_time",
+            unique=True,
+        ),
     )

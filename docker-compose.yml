@@ -37,6 +37,7 @@ services:
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       QUEUE_SERVICE_URL: "http://queue:8083"
+      SCHEDULING_SERVICE_URL: "http://scheduling:8084"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-local-missing-openai-key}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -45,6 +46,8 @@ services:
       migrate:
         condition: service_completed_successfully
       queue:
+        condition: service_started
+      scheduling:
         condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
@@ -79,6 +82,20 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # scheduling-service owns departments/doctors/clinics/appointments as of
+  # Phase 4 (see services/scheduling). Same trust model as queue above.
+  scheduling:
+    build: ./services/scheduling
+    expose:
+      - "8084"
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL is required. Run ./setup.sh or create .env.}
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   gateway:
     build: ./services/gateway
     ports:
@@ -88,6 +105,7 @@ services:
       BACKEND_URL: "http://api:8000"
       IDENTITY_URL: "http://identity:8082"
       QUEUE_SERVICE_URL: "http://queue:8083"
+      SCHEDULING_SERVICE_URL: "http://scheduling:8084"
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required. Run ./setup.sh or create .env.}
@@ -98,6 +116,8 @@ services:
       identity:
         condition: service_started
       queue:
+        condition: service_started
+      scheduling:
         condition: service_started
 
   frontend:

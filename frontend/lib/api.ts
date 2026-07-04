@@ -238,13 +238,21 @@ export function getDeptName(code: string | null | undefined): string {
 
 /**
  * Book an appointment with a chosen doctor after AUTO_RESOLVED triage.
+ *
+ * scheduling-service requires an `Idempotency-Key` (Phase 4): pass the same
+ * key if retrying an attempt that may or may not have gone through (e.g.
+ * after a network error) so the retry returns the original booking instead
+ * of creating a duplicate. Callers should generate a fresh key per distinct
+ * booking attempt (see the caller's use of crypto.randomUUID()).
  */
 export async function createAppointment(
   req: AppointmentRequest,
-  patientToken: string
+  patientToken: string,
+  idempotencyKey: string
 ): Promise<AppointmentResponse> {
   return apiFetch<AppointmentResponse>("/api/v1/appointments", patientToken, {
     method: "POST",
     body: JSON.stringify(req),
+    headers: { "Idempotency-Key": idempotencyKey },
   });
 }

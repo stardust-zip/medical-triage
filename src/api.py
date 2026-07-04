@@ -9,9 +9,11 @@ POST /api/v1/chat/triage            – Main patient triage chat endpoint
 POST /api/v1/admin/seed-red-flags   – Seed red-flag embeddings into DB (one-time)
 
 Nurse-queue endpoints (GET /api/v1/queue/pending, POST /api/v1/queue/resolve,
-POST /api/v1/queue/check-timeouts) moved to queue-service (Go) in Phase 3 —
-api-gateway routes them there directly now, this backend no longer serves
-them at all (see services/queue and services/gateway/main.go).
+POST /api/v1/queue/check-timeouts) moved to queue-service (Go) in Phase 3, and
+POST /api/v1/appointments moved to scheduling-service (Go) in Phase 4 —
+api-gateway routes all of them there directly now, this backend no longer
+serves any of them at all (see services/queue, services/scheduling, and
+services/gateway/main.go).
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from .agent import (
-    create_appointment,
     db_connection,
     run_triage_pipeline,
     seed_red_flags,
@@ -41,8 +42,6 @@ from .agent import (
 from .config import settings
 from .context import PatientContext, StaffContext, get_patient_context, require_roles
 from .schema import (
-    AppointmentRequest,
-    AppointmentResponse,
     ChatRequest,
     ChatResponse,
     ClinicInfo,
@@ -488,63 +487,3 @@ async def seed_red_flags_endpoint(
         ),
     )
 
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/appointments
-# ---------------------------------------------------------------------------
-
-
-@app.post(
-    "/api/v1/appointments",
-    response_model=AppointmentResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Appointments"],
-    summary="Book an appointment with a doctor",
-    responses={
-        201: {"description": "Appointment booked successfully"},
-        503: {"description": "Database unavailable"},
-    },
-)
-@limiter.limit("20/minute")
-async def create_appointment_endpoint(
-    request: Request,  # noqa: ARG001
-    body: AppointmentRequest,
-    ctx: PatientContext = Depends(get_patient_context),
-):
-    """
-    Patient books an appointment with a chosen doctor after AUTO_RESOLVED triage.
-
-    Inserts a row into the ``appointments`` table and returns a confirmation.
-    """
-    logger.info(
-        "Appointment request: patient_session=%s doctor=%s dept=%s time=%s",
-        ctx.patient_session_id,
-        body.doctor_id,
-        body.department_code,
-        body.appointment_time,
-    )
-
-    try:
-        async with db_connection(ctx.org_id) as conn:
-            appt_id = await create_appointment(
-                conn=conn,
-                patient_id=ctx.patient_session_id,
-                doctor_id=body.doctor_id,
-                department_code=body.department_code,
-                appointment_time=body.appointment_time,
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to create appointment: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Không thể đặt lịch hẹn. Vui lòng thử lại.",
-        ) from exc
-
-    return AppointmentResponse(
-        success=True,
-        appointment_id=appt_id,
-        message=(
-            f"Lịch hẹn đã được đặt thành công vào {body.appointment_time}. "
-            "Vui lòng đến đúng giờ và mang theo CMND/CCCD."
-        ),
-    )
