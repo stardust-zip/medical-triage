@@ -13,6 +13,9 @@
 -- Extensions
 -- ---------------------------------------------------------------------------
 
+-- pgcrypto: enables gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- pgvector: enables VECTOR column type and cosine-similarity operator (<=>)
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -20,25 +23,34 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- ENUM types
 -- ---------------------------------------------------------------------------
 
-CREATE TYPE triage_resolution AS ENUM (
-    'AI_AUTO',
-    'NURSE_APPROVED',
-    'NURSE_CORRECTED',
-    'DOCTOR_CORRECTED'
-);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'triage_resolution') THEN
+        CREATE TYPE triage_resolution AS ENUM (
+            'AI_AUTO',
+            'NURSE_APPROVED',
+            'NURSE_CORRECTED',
+            'DOCTOR_CORRECTED'
+        );
+    END IF;
 
-CREATE TYPE queue_status AS ENUM (
-    'PENDING',
-    'RESOLVED',
-    'TIMEOUT'
-);
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'queue_status') THEN
+        CREATE TYPE queue_status AS ENUM (
+            'PENDING',
+            'RESOLVED',
+            'TIMEOUT'
+        );
+    END IF;
 
-CREATE TYPE user_role AS ENUM (
-    'OWNER',
-    'ADMIN',
-    'NURSE',
-    'DOCTOR'
-);
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+        CREATE TYPE user_role AS ENUM (
+            'OWNER',
+            'ADMIN',
+            'NURSE',
+            'DOCTOR'
+        );
+    END IF;
+END $$;
 
 -- =============================================================================
 -- Identity / Tenancy (owned by identity-service)

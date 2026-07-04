@@ -9,6 +9,7 @@ description = "we can do it in 2 days!"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+  "alembic>=1.18.0",
   "fastapi>=0.111.0",
   "uvicorn[standard]>=0.29.0",
   "pydantic>=2.7.0",
@@ -18,29 +19,22 @@ dependencies = [
   "slowapi>=0.1.9",
   "psutil>=5.9.8",
   "python-dotenv>=1.0.1",
+  "sqlalchemy>=2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-	"pytest",
-
-	# pip install . install the core application
-	# pip install ".[dev]" installs the app PLUS all these testing and linting tools
+  "pytest>=8.0.0",
+  "ruff>=0.8.0",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
 
 
 [tool.pytest.ini_options]
 # Tell pytest to add the 'src' directory to the PYTHONPATH
 pythonpath = [
-  "src"
+  "."
 ]
-
-[tool.basedpyright]
-# Tell basedpyright to add 'src' to its list of
-# paths to search for imports. This directly fixes the
-# "reportMissingImports" error.
-extraPaths = [
-  "src"
-]
-include = ["src"]
-exclude = ["__pycache__", ".direnv", ".mypy_cache", ".git", ".venv"]
