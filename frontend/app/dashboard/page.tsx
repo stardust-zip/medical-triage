@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, type FormEvent } from "react";
 import {
   getPendingQueue,
   resolveQueueItem,
@@ -9,7 +9,15 @@ import {
   getDeptName,
   type QueueItem,
 } from "@/lib/api";
-import { subscribeToQueue, isSupabaseConfigured } from "@/lib/supabase";
+import {
+  subscribeToQueue,
+  isSupabaseConfigured,
+  signInStaff,
+  signOutStaff,
+  getStaffSession,
+  onStaffAuthChange,
+  type StaffSession,
+} from "@/lib/supabase";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -290,6 +298,75 @@ function QueueRow({
 }
 
 // ---------------------------------------------------------------------------
+// Staff login gate
+//
+// Phase 1: the nurse queue is tenant + role scoped, so the dashboard now
+// requires a real Supabase Auth sign-in instead of a client-generated
+// "NURSE-XXXXXX" id — api-gateway verifies this token and resolves the
+// caller's org/role via identity-service (see services/gateway/auth.go).
+// ---------------------------------------------------------------------------
+
+function StaffLoginForm() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      // No local state update needed here – the dashboard's
+      // onStaffAuthChange listener picks up the new session automatically.
+      await signInStaff(email, password);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-sm bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-4"
+      >
+        <div>
+          <h1 className="text-lg font-bold text-gray-800">🏥 TriageOS Dashboard</h1>
+          <p className="text-sm text-gray-500 mt-1">Đăng nhập với tài khoản điều dưỡng/quản trị.</p>
+        </div>
+        <input
+          type="email"
+          required
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+        />
+        <input
+          type="password"
+          required
+          placeholder="Mật khẩu"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+        />
+        {error && <p className="text-xs text-red-600">⚠️ {error}</p>}
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold transition-colors"
+        >
+          {submitting ? "Đang đăng nhập..." : "Đăng nhập"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Dashboard Component
 // ---------------------------------------------------------------------------
 
@@ -308,7 +385,20 @@ export default function NurseDashboard() {
     selectedDept: DEPARTMENTS[0].code,
   });
   const [modalLoading, setModalLoading] = useState(false);
-  const nurseId = useRef("NURSE-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+  const [staffSession, setStaffSession] = useState<StaffSession | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Staff auth: resolve the current session once, then react to sign-in/out.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    getStaffSession().then((session) => {
+      setStaffSession(session);
+      setAuthChecked(true);
+    });
+    return onStaffAuthChange(setStaffSession);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Toast helper
@@ -327,8 +417,9 @@ export default function NurseDashboard() {
   // ---------------------------------------------------------------------------
 
   const fetchQueue = useCallback(async () => {
+    if (!staffSession) return;
     try {
-      const data = await getPendingQueue();
+      const data = await getPendingQueue(staffSession.accessToken);
       setItems(data.items);
       setLastRefresh(new Date());
       setError(null);
@@ -338,30 +429,29 @@ export default function NurseDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [staffSession]);
 
   // ---------------------------------------------------------------------------
-  // Initial load + polling fallback (every 10s)
+  // Initial load + polling fallback (every 10s) – only once signed in
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
+    if (!staffSession) return;
     setLastRefresh(new Date());
-  }, []);
-
-  useEffect(() => {
     fetchQueue();
     const pollInterval = setInterval(fetchQueue, 10_000);
     return () => clearInterval(pollInterval);
-  }, [fetchQueue]);
+  }, [fetchQueue, staffSession]);
 
   // ---------------------------------------------------------------------------
   // SLA timeout sweep every 30s
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
+    if (!staffSession) return;
     const sweep = async () => {
       try {
-        await checkTimeouts();
+        await checkTimeouts(staffSession.accessToken);
         // Re-fetch so timed-out items disappear from the list
         await fetchQueue();
       } catch {
@@ -370,14 +460,14 @@ export default function NurseDashboard() {
     };
     const t = setInterval(sweep, 30_000);
     return () => clearInterval(t);
-  }, [fetchQueue]);
+  }, [fetchQueue, staffSession]);
 
   // ---------------------------------------------------------------------------
   // Supabase Realtime
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!isSupabaseConfigured()) return;
+    if (!staffSession || !isSupabaseConfigured()) return;
 
     const cleanup = subscribeToQueue((payload) => {
       // Any change to the queue → refresh the list
@@ -394,7 +484,7 @@ export default function NurseDashboard() {
       cleanup();
       setRealtimeActive(false);
     };
-  }, [fetchQueue]);
+  }, [fetchQueue, staffSession]);
 
   // ---------------------------------------------------------------------------
   // Approve handler
@@ -402,14 +492,17 @@ export default function NurseDashboard() {
 
   const handleApprove = useCallback(
     async (queueId: string, dept: string) => {
+      if (!staffSession) return;
       setApproving(queueId);
       try {
-        await resolveQueueItem({
-          queue_id: queueId,
-          approved_dept: dept,
-          nurse_id: nurseId.current,
-          resolution_type: "NURSE_APPROVED",
-        });
+        await resolveQueueItem(
+          {
+            queue_id: queueId,
+            approved_dept: dept,
+            resolution_type: "NURSE_APPROVED",
+          },
+          staffSession.accessToken
+        );
         showToast(`✅ Đã duyệt: ${getDeptName(dept)}`);
         await fetchQueue();
       } catch (err: unknown) {
@@ -419,7 +512,7 @@ export default function NurseDashboard() {
         setApproving(null);
       }
     },
-    [fetchQueue, showToast]
+    [staffSession, fetchQueue, showToast]
   );
 
   // ---------------------------------------------------------------------------
@@ -443,6 +536,7 @@ export default function NurseDashboard() {
   // When user picks a new dept in the modal, immediately confirm
   const handleModalConfirm = useCallback(
     async (newDept: string) => {
+      if (!staffSession) return;
       if (newDept === modal.currentDept) {
         // No change – treat as approve
         closeModal();
@@ -451,12 +545,14 @@ export default function NurseDashboard() {
       }
       setModalLoading(true);
       try {
-        await resolveQueueItem({
-          queue_id: modal.queueId,
-          approved_dept: newDept,
-          nurse_id: nurseId.current,
-          resolution_type: "NURSE_CORRECTED",
-        });
+        await resolveQueueItem(
+          {
+            queue_id: modal.queueId,
+            approved_dept: newDept,
+            resolution_type: "NURSE_CORRECTED",
+          },
+          staffSession.accessToken
+        );
         showToast(`🔄 Đã đổi khoa: ${getDeptName(newDept)}`);
         setModal((m) => ({ ...m, open: false }));
         await fetchQueue();
@@ -467,12 +563,24 @@ export default function NurseDashboard() {
         setModalLoading(false);
       }
     },
-    [modal, closeModal, handleApprove, fetchQueue, showToast]
+    [staffSession, modal, closeModal, handleApprove, fetchQueue, showToast]
   );
 
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-400 text-sm">
+        Đang kiểm tra đăng nhập...
+      </div>
+    );
+  }
+
+  if (!staffSession) {
+    return <StaffLoginForm />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -538,6 +646,14 @@ export default function NurseDashboard() {
               ↻ Làm mới
             </button>
 
+            {/* Sign out */}
+            <button
+              onClick={() => signOutStaff()}
+              className="text-blue-200 hover:text-white border border-blue-500 hover:border-blue-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
+            >
+              Đăng xuất
+            </button>
+
             {/* Back to patient chat */}
             <a
               href="/"
@@ -584,7 +700,7 @@ export default function NurseDashboard() {
             </span>
           </div>
           <div className="ml-auto text-xs text-gray-400">
-            SLA: 3 phút/ca · Điều dưỡng: {nurseId.current}
+            SLA: 3 phút/ca · Điều dưỡng: {staffSession.email}
           </div>
         </div>
       </div>

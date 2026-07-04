@@ -61,13 +61,13 @@ class QueueStatus(str, Enum):
 class ChatRequest(BaseModel):
     """
     Payload sent by the patient-facing frontend to ``POST /api/v1/chat/triage``.
+
+    Note: there is no ``patient_id`` field. The patient's identity is the
+    anonymous, token-bound session api-gateway resolves from the bearer
+    token (see src/context.py::PatientContext) — a client can no longer
+    supply an arbitrary free-text patient id.
     """
 
-    patient_id: str = Field(
-        ...,
-        description="Opaque patient identifier (does NOT need to be a real name).",
-        examples=["PAT-00123"],
-    )
     message: str = Field(
         ...,
         min_length=1,
@@ -306,11 +306,9 @@ class ResolveRequest(BaseModel):
         description="Department code the nurse approved or corrected to.",
         examples=["TIM_MACH"],
     )
-    nurse_id: str = Field(
-        ...,
-        description="Identifier of the nurse performing the resolution.",
-        examples=["NURSE-007"],
-    )
+    # No nurse_id field: the resolving nurse's identity comes from the
+    # verified staff session (src/context.py::StaffContext), never the
+    # request body — a client can't attribute a resolution to someone else.
     resolution_type: ResolutionType = Field(
         default=ResolutionType.NURSE_APPROVED,
         description=(
@@ -347,7 +345,8 @@ class ResolveResponse(BaseModel):
 class AppointmentRequest(BaseModel):
     """Payload sent by the patient to book an appointment with a specific doctor."""
 
-    patient_id: str = Field(..., description="Opaque patient identifier.")
+    # No patient_id field – identity comes from the verified patient session
+    # (src/context.py::PatientContext), same as ChatRequest.
     doctor_id: str = Field(..., description="UUID of the chosen doctor.")
     department_code: str = Field(..., description="Department code.")
     appointment_time: str = Field(

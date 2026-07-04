@@ -1,11 +1,35 @@
 services:
+  # FastAPI monolith – Phase 1 keeps it as-is behind api-gateway (the routing
+  # seam for later service extractions). No published port: only the gateway
+  # talks to it, enforced by GATEWAY_SHARED_SECRET (see src/context.py).
   api:
     build: .
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - ./src:/app/src
     env_file:
       - .env
     stdin_open: true
     tty: true
+
+  identity:
+    build: ./services/identity
+    expose:
+      - "8082"
+    env_file:
+      - .env
+
+  gateway:
+    build: ./services/gateway
+    ports:
+      - "8000:8080"
+    environment:
+      PORT: "8080"
+      BACKEND_URL: "http://api:8000"
+      IDENTITY_URL: "http://identity:8082"
+    env_file:
+      - .env
+    depends_on:
+      - api
+      - identity

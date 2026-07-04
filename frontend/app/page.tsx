@@ -10,6 +10,7 @@ import {
   type DoctorInfo,
   type ClinicInfo,
 } from "@/lib/api";
+import { getPatientToken } from "@/lib/patientSession";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,15 +56,6 @@ const WELCOME_MESSAGE: Message = {
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-function getOrCreatePatientId(): string {
-  if (typeof window === "undefined") return generateId();
-  const stored = localStorage.getItem("triageos_patient_id");
-  if (stored) return stored;
-  const id = "PAT-" + generateId().toUpperCase();
-  localStorage.setItem("triageos_patient_id", id);
-  return id;
 }
 
 function formatTime(date: Date): string {
@@ -127,44 +119,17 @@ function EmergencyAlert({
   );
 }
 
-function PendingHumanBubble({
-  queueId,
-  onResolved,
-}: {
-  queueId: string;
-  onResolved: (dept: string) => void;
-}) {
+function PendingHumanBubble() {
   const [elapsed, setElapsed] = useState(0);
   const [timedOut, setTimedOut] = useState(false);
   const startRef = useRef(Date.now());
-  const resolvedRef = useRef(false);
 
-  // Poll for resolution every 3 seconds
-  useEffect(() => {
-    const poll = async () => {
-      if (resolvedRef.current) return;
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1/queue/pending`,
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        const item = data.items?.find(
-          (i: { id: string; status: string }) => i.id === queueId,
-        );
-        // If item is gone from pending list, it was resolved
-        if (!item) {
-          resolvedRef.current = true;
-          onResolved("Điều dưỡng đã xác nhận");
-        }
-      } catch {
-        // ignore
-      }
-    };
-
-    const pollInterval = setInterval(poll, 3000);
-    return () => clearInterval(pollInterval);
-  }, [queueId, onResolved]);
+  // ponytail: no live "nurse resolved" push notice here — GET
+  // /api/v1/queue/pending now requires a staff bearer token (Phase 1
+  // tenancy), so the old "poll the nurse queue directly" trick a patient
+  // session can no longer do. The patient still sees the SLA countdown and
+  // the timeout fallback below; a real-time resolved notice comes back once
+  // queue-service's WebSocket hub ships (Phase 3 of the implementation plan).
 
   // Timer
   useEffect(() => {
@@ -288,12 +253,12 @@ function getTimeSlots(): { label: string; iso: string }[] {
 function DoctorSelectionBubble({
   doctors,
   clinics,
-  patientId,
+  patientToken,
   departmentCode,
 }: {
   doctors: DoctorInfo[];
   clinics: ClinicInfo[];
-  patientId: string;
+  patientToken: string;
   departmentCode: string;
 }) {
   const [selectedClinic, setSelectedClinic] = useState<ClinicInfo | null>(null);
@@ -310,12 +275,14 @@ function DoctorSelectionBubble({
     setBooking(true);
     setError(null);
     try {
-      const res = await createAppointment({
-        patient_id: patientId,
-        doctor_id: selectedDoctor.id,
-        department_code: departmentCode,
-        appointment_time: selectedSlot,
-      });
+      const res = await createAppointment(
+        {
+          doctor_id: selectedDoctor.id,
+          department_code: departmentCode,
+          appointment_time: selectedSlot,
+        },
+        patientToken
+      );
       setBooked(res.message);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Không thể đặt lịch.");
@@ -536,15 +503,18 @@ export default function PatientChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId] = useState(() => generateId());
-  const [patientId, setPatientId] = useState<string>("");
+  const [patientToken, setPatientToken] = useState<string>("");
   const [pendingQueueId, setPendingQueueId] = useState<string | null>(null);
   const [followUpRounds, setFollowUpRounds] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Initialise patient ID on client (avoids SSR mismatch)
+  // Bootstrap an anonymous, token-bound patient session on the client
+  // (avoids SSR mismatch, and the token is only ever needed for fetch calls).
   useEffect(() => {
-    setPatientId(getOrCreatePatientId());
+    getPatientToken()
+      .then(setPatientToken)
+      .catch((err) => console.error("[patient-session]", err));
   }, []);
 
   // Auto-scroll to latest message
@@ -562,23 +532,9 @@ export default function PatientChatPage() {
       }));
   }, [messages]);
 
-  const handleNurseResolved = useCallback((dept: string) => {
-    setPendingQueueId(null);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: generateId(),
-        role: "assistant",
-        content: `✅ Điều dưỡng đã xác nhận chuyên khoa phù hợp cho bạn. ${dept}. Vui lòng đến quầy tiếp đón để được hướng dẫn thêm.`,
-        timestamp: new Date(),
-        flow: "AUTO_RESOLVED",
-      },
-    ]);
-  }, []);
-
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || isLoading || !patientId) return;
+    if (!text || isLoading || !patientToken) return;
 
     // Optimistically add user message
     const userMessage: Message = {
@@ -592,13 +548,15 @@ export default function PatientChatPage() {
     setIsLoading(true);
 
     try {
-      const response: ChatResponse = await sendTriageMessage({
-        patient_id: patientId,
-        message: text,
-        session_id: sessionId,
-        conversation_history: buildHistory(),
-        follow_up_rounds: followUpRounds,
-      });
+      const response: ChatResponse = await sendTriageMessage(
+        {
+          message: text,
+          session_id: sessionId,
+          conversation_history: buildHistory(),
+          follow_up_rounds: followUpRounds,
+        },
+        patientToken
+      );
 
       if (response.flow === "EMERGENCY" && response.emergency) {
         const em = response.emergency;
@@ -746,7 +704,7 @@ export default function PatientChatPage() {
                       <DoctorSelectionBubble
                         doctors={msg.doctors}
                         clinics={msg.clinics ?? []}
-                        patientId={patientId}
+                        patientToken={patientToken}
                         departmentCode={msg.departmentCode}
                       />
                     </div>
@@ -756,12 +714,7 @@ export default function PatientChatPage() {
           ))}
 
           {/* Pending human triage widget */}
-          {pendingQueueId && (
-            <PendingHumanBubble
-              queueId={pendingQueueId}
-              onResolved={handleNurseResolved}
-            />
-          )}
+          {pendingQueueId && <PendingHumanBubble />}
 
           {/* Loading indicator */}
           {isLoading && <TypingIndicator />}
@@ -784,7 +737,7 @@ export default function PatientChatPage() {
             />
             <button
               onClick={handleSend}
-              disabled={isLoading || !input.trim() || !patientId}
+              disabled={isLoading || !input.trim() || !patientToken}
               className="shrink-0 w-10 h-10 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-gray-300 text-white flex items-center justify-center transition-colors shadow-sm"
               aria-label="Gửi"
             >

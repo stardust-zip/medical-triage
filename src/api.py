@@ -23,7 +23,7 @@ from typing import Any
 
 import psutil
 import psycopg2
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langfuse import get_client, observe
@@ -41,6 +41,7 @@ from .agent import (
     seed_red_flags,
 )
 from .config import settings
+from .context import PatientContext, StaffContext, get_patient_context, require_roles
 from .schema import (
     AppointmentRequest,
     AppointmentResponse,
@@ -311,6 +312,7 @@ def _build_patient_message(flow: str, triage: dict[str, Any]) -> str:
 async def chat_triage(
     request: Request,  # required by slowapi limiter
     body: ChatRequest,
+    ctx: PatientContext = Depends(get_patient_context),
 ):
     """
     Main patient-facing triage endpoint.
@@ -332,9 +334,10 @@ async def chat_triage(
         langfuse = get_client()
         langfuse.update_current_trace(
             session_id=body.session_id or str(uuid.uuid4()),
-            user_id=body.patient_id,
+            user_id=ctx.patient_session_id,
             tags=["triageos", "v1"],
             metadata={
+                "org_id": ctx.org_id,
                 "message_length": len(body.message),
                 "has_history": bool(body.conversation_history),
             },
@@ -343,14 +346,16 @@ async def chat_triage(
         pass  # Langfuse is optional – never block the request
 
     logger.info(
-        "Triage request: patient_id=%s session=%s msg_len=%d",
-        body.patient_id,
+        "Triage request: org=%s patient_session=%s session=%s msg_len=%d",
+        ctx.org_id,
+        ctx.patient_session_id,
         body.session_id,
         len(body.message),
     )
 
     pipeline_result = await run_triage_pipeline(
-        patient_id=body.patient_id,
+        patient_id=ctx.patient_session_id,
+        org_id=ctx.org_id,
         message=body.message,
         conversation_history=body.conversation_history or [],
     )
@@ -367,8 +372,9 @@ async def chat_triage(
             similarity_score=float(pipeline_result.get("similarity_score") or 0.0),
         )
         logger.warning(
-            "EMERGENCY: patient=%s keyword='%s' score=%.4f",
-            body.patient_id,
+            "EMERGENCY: org=%s patient_session=%s keyword='%s' score=%.4f",
+            ctx.org_id,
+            ctx.patient_session_id,
             emergency.matched_keyword,
             emergency.similarity_score,
         )
@@ -415,8 +421,8 @@ async def chat_triage(
     )
 
     logger.info(
-        "Triage done: patient=%s flow=%s dept=%s confidence=%s queue_id=%s",
-        body.patient_id,
+        "Triage done: patient_session=%s flow=%s dept=%s confidence=%s queue_id=%s",
+        ctx.patient_session_id,
         flow_str,
         triage_result.department_code,
         triage_result.confidence_score,
@@ -447,17 +453,21 @@ async def chat_triage(
     },
 )
 @limiter.limit("60/minute")
-async def get_pending_queue_endpoint(request: Request):  # noqa: ARG001
+async def get_pending_queue_endpoint(
+    request: Request,  # noqa: ARG001
+    ctx: StaffContext = Depends(require_roles("NURSE", "ADMIN", "OWNER")),
+):
     """
     Nurse dashboard polling endpoint.
 
-    Returns all ``PENDING`` entries in ``human_triage_queue``, ordered
-    oldest-first so the highest-SLA-risk cases appear at the top.
+    Returns all ``PENDING`` entries in ``human_triage_queue`` for the caller's
+    tenant (Postgres RLS scopes this — see src/agent.py::_set_org_context),
+    ordered oldest-first so the highest-SLA-risk cases appear at the top.
     Each item includes a computed ``minutes_waiting`` field and a
     ``sla_breached`` flag.
     """
     try:
-        async with db_connection() as conn:
+        async with db_connection(ctx.org_id) as conn:
             rows = await get_pending_queue(conn)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to fetch pending queue: %s", exc, exc_info=True)
@@ -512,7 +522,11 @@ async def get_pending_queue_endpoint(request: Request):  # noqa: ARG001
     },
 )
 @limiter.limit("30/minute")
-async def resolve_queue_endpoint(request: Request, body: ResolveRequest):  # noqa: ARG001
+async def resolve_queue_endpoint(
+    request: Request,  # noqa: ARG001
+    body: ResolveRequest,
+    ctx: StaffContext = Depends(require_roles("NURSE", "ADMIN", "OWNER")),
+):
     """
     Nurse approves or corrects a triage decision.
 
@@ -522,11 +536,13 @@ async def resolve_queue_endpoint(request: Request, body: ResolveRequest):  # noq
 
     Set ``resolution_type = NURSE_APPROVED`` when the AI suggestion was
     correct, or ``NURSE_CORRECTED`` when the nurse changed the department.
+    The resolving nurse's identity is the verified staff session
+    (``ctx.user_id`` / ``ctx.email``), never a client-supplied field.
     """
     queue_id_str = str(body.queue_id)
 
     try:
-        async with db_connection() as conn:
+        async with db_connection(ctx.org_id) as conn:
             updated = await resolve_queue_item(
                 conn=conn,
                 queue_id=queue_id_str,
@@ -552,9 +568,10 @@ async def resolve_queue_endpoint(request: Request, body: ResolveRequest):  # noq
         )
 
     logger.info(
-        "Queue resolved: id=%s nurse=%s dept=%s type=%s",
+        "Queue resolved: id=%s nurse=%s (%s) dept=%s type=%s",
         queue_id_str,
-        body.nurse_id,
+        ctx.user_id,
+        ctx.email,
         body.approved_dept,
         body.resolution_type.value,
     )
@@ -572,7 +589,7 @@ async def resolve_queue_endpoint(request: Request, body: ResolveRequest):  # noq
         resolution_type=body.resolution_type,
         message=(
             f"{action}: bệnh nhân được điều phối đến khoa {body.approved_dept} "
-            f"bởi điều dưỡng {body.nurse_id}."
+            f"bởi điều dưỡng {ctx.email or ctx.user_id}."
         ),
     )
 
@@ -594,9 +611,12 @@ async def resolve_queue_endpoint(request: Request, body: ResolveRequest):  # noq
     },
 )
 @limiter.limit("10/minute")
-async def check_timeouts_endpoint(request: Request):  # noqa: ARG001
+async def check_timeouts_endpoint(
+    request: Request,  # noqa: ARG001
+    ctx: StaffContext = Depends(require_roles("NURSE", "ADMIN", "OWNER")),
+):
     """
-    SLA enforcement sweep.
+    SLA enforcement sweep, scoped to the caller's tenant.
 
     Marks every ``PENDING`` queue item whose ``created_at`` is older than
     ``QUEUE_SLA_MINUTES`` (default: 3 min) as ``TIMEOUT``.
@@ -607,7 +627,7 @@ async def check_timeouts_endpoint(request: Request):  # noqa: ARG001
     - As a background task triggered by other endpoints.
     """
     try:
-        async with db_connection() as conn:
+        async with db_connection(ctx.org_id) as conn:
             count = await mark_timed_out_items(conn, settings.QUEUE_SLA_MINUTES)
     except Exception as exc:  # noqa: BLE001
         logger.error("Timeout sweep failed: %s", exc, exc_info=True)
@@ -643,7 +663,10 @@ async def check_timeouts_endpoint(request: Request):  # noqa: ARG001
     },
 )
 @limiter.limit(settings.RATE_LIMIT_ADMIN)
-async def seed_red_flags_endpoint(request: Request):  # noqa: ARG001
+async def seed_red_flags_endpoint(
+    request: Request,  # noqa: ARG001
+    ctx: StaffContext = Depends(require_roles("ADMIN", "OWNER")),
+):
     """
     Generate OpenAI embeddings for all 15 Vietnamese emergency red-flag
     keywords and upsert them into the ``red_flags`` table.
@@ -656,13 +679,15 @@ async def seed_red_flags_endpoint(request: Request):  # noqa: ARG001
     - Once after the initial DB migration.
     - After changing the embedding model to regenerate all vectors.
 
-    **Security note:** Protect this endpoint with a reverse-proxy
-    IP allow-list or an ``Authorization`` header in production.
+    Restricted to ADMIN/OWNER — api-gateway already enforces this at the
+    routing layer, this is defense-in-depth. The seeded keywords are global
+    defaults (``org_id IS NULL``, shared by every tenant); per-org overrides
+    are a later extension, not required by this phase.
     """
     keywords = settings.RED_FLAG_KEYWORDS
 
     try:
-        async with db_connection() as conn:
+        async with db_connection(ctx.org_id) as conn:
             inserted = await seed_red_flags(conn, keywords)
     except Exception as exc:  # noqa: BLE001
         logger.error("Red-flag seeding failed: %s", exc, exc_info=True)
@@ -701,25 +726,29 @@ async def seed_red_flags_endpoint(request: Request):  # noqa: ARG001
     },
 )
 @limiter.limit("20/minute")
-async def create_appointment_endpoint(request: Request, body: AppointmentRequest):  # noqa: ARG001
+async def create_appointment_endpoint(
+    request: Request,  # noqa: ARG001
+    body: AppointmentRequest,
+    ctx: PatientContext = Depends(get_patient_context),
+):
     """
     Patient books an appointment with a chosen doctor after AUTO_RESOLVED triage.
 
     Inserts a row into the ``appointments`` table and returns a confirmation.
     """
     logger.info(
-        "Appointment request: patient=%s doctor=%s dept=%s time=%s",
-        body.patient_id,
+        "Appointment request: patient_session=%s doctor=%s dept=%s time=%s",
+        ctx.patient_session_id,
         body.doctor_id,
         body.department_code,
         body.appointment_time,
     )
 
     try:
-        async with db_connection() as conn:
+        async with db_connection(ctx.org_id) as conn:
             appt_id = await create_appointment(
                 conn=conn,
-                patient_id=body.patient_id,
+                patient_id=ctx.patient_session_id,
                 doctor_id=body.doctor_id,
                 department_code=body.department_code,
                 appointment_time=body.appointment_time,

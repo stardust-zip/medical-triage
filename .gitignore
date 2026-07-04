@@ -220,3 +220,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Go (services/gateway, services/identity) – compiled binaries, no extension
+/services/gateway/gateway
+/services/identity/identity

@@ -50,6 +50,14 @@ class Settings:
     DATABASE_URL: str = os.environ["DATABASE_URL"]
 
     # ------------------------------------------------------------------
+    # Tenancy / gateway trust boundary (Phase 1)
+    # ------------------------------------------------------------------
+    # Shared secret api-gateway attaches to every proxied request so this
+    # backend can refuse anything that didn't pass through it (see
+    # src/context.py::require_gateway_secret and services/gateway).
+    GATEWAY_SHARED_SECRET: str = os.environ["GATEWAY_SHARED_SECRET"]
+
+    # ------------------------------------------------------------------
     # Langfuse observability
     # ------------------------------------------------------------------
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")

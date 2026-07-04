@@ -1,11 +1,10 @@
-// lib/supabase.ts – Supabase client for Realtime subscriptions
+// lib/supabase.ts – Supabase client for staff auth + Realtime subscriptions
 //
-// Used exclusively on the Nurse Dashboard to receive live updates when
-// new cases enter the human_triage_queue table.
-//
-// The REST/auth features are NOT used here – we connect directly to the
-// FastAPI backend for all data mutations.  Supabase is only used for its
-// Realtime WebSocket capability.
+// Phase 1: staff (nurse/admin) sign-in uses Supabase Auth so api-gateway can
+// verify a real JWT (see services/gateway/auth.go requireStaff) instead of
+// trusting a client-generated nurse id. Realtime is still used on the Nurse
+// Dashboard to receive live updates when new cases enter the
+// human_triage_queue table.
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
@@ -46,9 +45,9 @@ export function getSupabaseClient(): SupabaseClient {
       },
     },
     auth: {
-      // We are not using Supabase Auth – disable auto-refresh
-      autoRefreshToken: false,
-      persistSession: false,
+      // Staff sign-in (nurse/admin) – keep the session across page loads.
+      autoRefreshToken: true,
+      persistSession: true,
     },
   });
 
@@ -146,4 +145,45 @@ export function subscribeToQueue(
 export function isSupabaseConfigured(): boolean {
   return Boolean(supabaseUrl && supabaseAnonKey &&
     supabaseUrl !== "https://placeholder.supabase.co");
+}
+
+// ---------------------------------------------------------------------------
+// Staff auth (nurse / admin / owner)
+// ---------------------------------------------------------------------------
+
+/** Sign in a staff member; api-gateway verifies the resulting JWT itself. */
+export async function signInStaff(email: string, password: string) {
+  const { data, error } = await getSupabaseClient().auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw new Error(error.message);
+  return data.session;
+}
+
+export async function signOutStaff(): Promise<void> {
+  await getSupabaseClient().auth.signOut();
+}
+
+export interface StaffSession {
+  accessToken: string;
+  email: string;
+}
+
+function toStaffSession(session: { access_token: string; user: { email?: string } } | null): StaffSession | null {
+  if (!session) return null;
+  return { accessToken: session.access_token, email: session.user.email ?? "" };
+}
+
+/** Current staff session (access token + email), or null if signed out. */
+export async function getStaffSession(): Promise<StaffSession | null> {
+  const { data } = await getSupabaseClient().auth.getSession();
+  return toStaffSession(data.session);
+}
+
+export function onStaffAuthChange(callback: (session: StaffSession | null) => void): () => void {
+  const { data } = getSupabaseClient().auth.onAuthStateChange((_event, session) => {
+    callback(toStaffSession(session));
+  });
+  return () => data.subscription.unsubscribe();
 }

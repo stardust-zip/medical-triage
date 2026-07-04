@@ -57,8 +57,10 @@ export interface ConversationTurn {
   content: string;
 }
 
+// No patient_id field: the patient's identity is the anonymous session
+// token attached as a Bearer header (see lib/patientSession.ts) – the
+// gateway resolves it, the client can no longer supply an arbitrary id.
 export interface ChatRequest {
-  patient_id: string;
   message: string;
   session_id?: string;
   conversation_history?: ConversationTurn[];
@@ -66,7 +68,6 @@ export interface ChatRequest {
 }
 
 export interface AppointmentRequest {
-  patient_id: string;
   doctor_id: string;
   department_code: string;
   appointment_time: string;
@@ -94,10 +95,11 @@ export interface PendingQueueResponse {
   items: QueueItem[];
 }
 
+// No nurse_id field: the resolving nurse's identity comes from the staff
+// bearer token (see lib/supabase.ts signInStaff), never a client-set field.
 export interface ResolveRequest {
   queue_id: string;
   approved_dept: string;
-  nurse_id: string;
   resolution_type?: ResolutionType;
   notes?: string;
 }
@@ -122,6 +124,7 @@ export interface TimeoutCheckResponse {
 
 async function apiFetch<T>(
   path: string,
+  token: string,
   options?: RequestInit
 ): Promise<T> {
   const url = `${API_BASE}${path}`;
@@ -129,6 +132,7 @@ async function apiFetch<T>(
   const res = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
       ...(options?.headers ?? {}),
     },
     ...options,
@@ -157,29 +161,35 @@ async function apiFetch<T>(
  *
  * Returns AUTO_RESOLVED, PENDING_HUMAN, or EMERGENCY flow result.
  */
-export async function sendTriageMessage(req: ChatRequest): Promise<ChatResponse> {
-  return apiFetch<ChatResponse>("/api/v1/chat/triage", {
+export async function sendTriageMessage(
+  req: ChatRequest,
+  patientToken: string
+): Promise<ChatResponse> {
+  return apiFetch<ChatResponse>("/api/v1/chat/triage", patientToken, {
     method: "POST",
     body: JSON.stringify(req),
   });
 }
 
 // ---------------------------------------------------------------------------
-// Nurse queue
+// Nurse queue (requires a staff bearer token – see lib/supabase.ts)
 // ---------------------------------------------------------------------------
 
 /**
  * Fetch all PENDING queue items for the nurse dashboard.
  */
-export async function getPendingQueue(): Promise<PendingQueueResponse> {
-  return apiFetch<PendingQueueResponse>("/api/v1/queue/pending");
+export async function getPendingQueue(staffToken: string): Promise<PendingQueueResponse> {
+  return apiFetch<PendingQueueResponse>("/api/v1/queue/pending", staffToken);
 }
 
 /**
  * Nurse resolves (approves or corrects) a pending queue item.
  */
-export async function resolveQueueItem(req: ResolveRequest): Promise<ResolveResponse> {
-  return apiFetch<ResolveResponse>("/api/v1/queue/resolve", {
+export async function resolveQueueItem(
+  req: ResolveRequest,
+  staffToken: string
+): Promise<ResolveResponse> {
+  return apiFetch<ResolveResponse>("/api/v1/queue/resolve", staffToken, {
     method: "POST",
     body: JSON.stringify(req),
   });
@@ -189,8 +199,8 @@ export async function resolveQueueItem(req: ResolveRequest): Promise<ResolveResp
  * Trigger the SLA timeout sweep – marks stale PENDING items as TIMEOUT.
  * Useful to call periodically from the nurse dashboard.
  */
-export async function checkTimeouts(): Promise<TimeoutCheckResponse> {
-  return apiFetch<TimeoutCheckResponse>("/api/v1/queue/check-timeouts", {
+export async function checkTimeouts(staffToken: string): Promise<TimeoutCheckResponse> {
+  return apiFetch<TimeoutCheckResponse>("/api/v1/queue/check-timeouts", staffToken, {
     method: "POST",
   });
 }
@@ -230,9 +240,10 @@ export function getDeptName(code: string | null | undefined): string {
  * Book an appointment with a chosen doctor after AUTO_RESOLVED triage.
  */
 export async function createAppointment(
-  req: AppointmentRequest
+  req: AppointmentRequest,
+  patientToken: string
 ): Promise<AppointmentResponse> {
-  return apiFetch<AppointmentResponse>("/api/v1/appointments", {
+  return apiFetch<AppointmentResponse>("/api/v1/appointments", patientToken, {
     method: "POST",
     body: JSON.stringify(req),
   });

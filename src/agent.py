@@ -580,20 +580,37 @@ def _get_db_connection() -> Any:
     return conn
 
 
-@asynccontextmanager
-async def db_connection() -> AsyncGenerator[Any, None]:
+def _set_org_context(conn: Any, org_id: str) -> None:
     """
-    Async context manager that yields a psycopg2 connection and handles
-    commit / rollback / close automatically.
+    Bind every subsequent statement on *conn*'s transaction to *org_id* via
+    the ``app.org_id`` Postgres session variable that every table's
+    row-level-security policy checks (see db/init.sql). This is the
+    tenant-isolation enforcement point — callers never need a ``WHERE
+    org_id = ...`` app-layer filter.
+
+    Uses ``set_config(..., is_local=true)`` rather than ``SET LOCAL`` because
+    psycopg2 can't bind a parameter into a ``SET`` statement; ``set_config``
+    is a normal function call and accepts one like any other query.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.org_id', %s, true)", (str(org_id),))
+
+
+@asynccontextmanager
+async def db_connection(org_id: str) -> AsyncGenerator[Any, None]:
+    """
+    Async context manager that yields a psycopg2 connection scoped to
+    *org_id* and handles commit / rollback / close automatically.
 
     Usage::
 
-        async with db_connection() as conn:
+        async with db_connection(ctx.org_id) as conn:
             do_something(conn)
     """
     conn = None
     try:
         conn = _get_db_connection()
+        _set_org_context(conn, org_id)
         yield conn
         conn.commit()
     except Exception:
@@ -625,8 +642,8 @@ async def insert_triage_log(
         cur.execute(
             """
             INSERT INTO triage_logs
-                (id, raw_symptoms, symptom_embedding, ai_suggested_dept, confidence)
-            VALUES (%s, %s, %s::vector, %s, %s)
+                (id, org_id, raw_symptoms, symptom_embedding, ai_suggested_dept, confidence)
+            VALUES (%s, current_setting('app.org_id')::uuid, %s, %s::vector, %s, %s)
             """,
             (log_id, raw_symptoms, embedding_str, ai_suggested_dept, confidence),
         )
@@ -664,8 +681,8 @@ async def insert_to_queue(
         cur.execute(
             """
             INSERT INTO human_triage_queue
-                (id, patient_id, clinical_summary, suggested_dept, status)
-            VALUES (%s, %s, %s, %s, 'PENDING')
+                (id, org_id, patient_id, clinical_summary, suggested_dept, status)
+            VALUES (%s, current_setting('app.org_id')::uuid, %s, %s, %s, 'PENDING')
             """,
             (queue_id, patient_id, clinical_summary, suggested_dept),
         )
@@ -910,8 +927,8 @@ async def create_appointment(
         cur.execute(
             """
             INSERT INTO appointments
-                (id, patient_id, doctor_id, department_code, appointment_time)
-            VALUES (%s, %s, %s::uuid, %s, %s::timestamptz)
+                (id, org_id, patient_id, doctor_id, department_code, appointment_time)
+            VALUES (%s, current_setting('app.org_id')::uuid, %s, %s::uuid, %s, %s::timestamptz)
             """,
             (appt_id, patient_id, doctor_id, department_code, appointment_time),
         )
@@ -931,6 +948,7 @@ async def create_appointment(
 
 async def run_triage_pipeline(
     patient_id: str,
+    org_id: str,
     message: str,
     conversation_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
@@ -955,6 +973,7 @@ async def run_triage_pipeline(
     conn = None
     try:
         conn = _get_db_connection()
+        _set_org_context(conn, org_id)
     except Exception as exc:
         logger.warning("DB unavailable (%s); proceeding with caution.", exc)
 
