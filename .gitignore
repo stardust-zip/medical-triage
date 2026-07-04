@@ -221,6 +221,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Go (services/gateway, services/identity) – compiled binaries, no extension
+# Go (services/gateway, services/identity, services/queue) – compiled
+# binaries, no extension
 /services/gateway/gateway
 /services/identity/identity
+/services/queue/queue

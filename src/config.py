@@ -58,6 +58,15 @@ class Settings:
     GATEWAY_SHARED_SECRET: str = os.environ["GATEWAY_SHARED_SECRET"]
 
     # ------------------------------------------------------------------
+    # queue-service (Phase 3)
+    # ------------------------------------------------------------------
+    # human_triage_queue moved to queue-service (Go); the pipeline reaches it
+    # server-to-server the same way api-gateway reaches identity-service,
+    # via a shared internal secret (see agent.py::create_queue_item).
+    QUEUE_SERVICE_URL: str = os.getenv("QUEUE_SERVICE_URL", "http://localhost:8083")
+    INTERNAL_SHARED_SECRET: str = os.environ["INTERNAL_SHARED_SECRET"]
+
+    # ------------------------------------------------------------------
     # Langfuse observability
     # ------------------------------------------------------------------
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
@@ -77,8 +86,9 @@ class Settings:
         os.getenv("HUMAN_TRIAGE_CONFIDENCE_THRESHOLD", "85")
     )
 
-    # Minutes before a PENDING queue item is marked TIMEOUT
-    QUEUE_SLA_MINUTES: int = int(os.getenv("QUEUE_SLA_MINUTES", "3"))
+    # QUEUE_SLA_MINUTES moved to queue-service (Go) in Phase 3 — it's the
+    # only thing that enforces the SLA now, so its own env var is the single
+    # source of truth (see services/queue/main.go), not duplicated here.
 
     # ------------------------------------------------------------------
     # Rate limiting

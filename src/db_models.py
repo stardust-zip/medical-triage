@@ -119,6 +119,9 @@ class HumanTriageQueue(Base):
     patient_id: Mapped[str] = mapped_column(String(255), nullable=False)
     clinical_summary: Mapped[str] = mapped_column(Text, nullable=False)
     suggested_dept: Mapped[str | None] = mapped_column(String(255))
+    triage_log_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("triage_logs.id", ondelete="SET NULL")
+    )
     status: Mapped[str] = mapped_column(queue_status, default="PENDING")
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -127,6 +130,7 @@ class HumanTriageQueue(Base):
     __table_args__ = (
         Index("idx_human_triage_queue_status", "status", "created_at"),
         Index("idx_human_triage_queue_org", "org_id"),
+        Index("idx_human_triage_queue_triage_log_id", "triage_log_id"),
     )
 
 

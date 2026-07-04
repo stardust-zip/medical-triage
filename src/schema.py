@@ -8,7 +8,6 @@ and OpenAPI docs are all driven from a single source of truth.
 
 from __future__ import annotations
 
-from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
@@ -36,22 +35,11 @@ class TriageFlow(str, Enum):
     """Agent needs more info from the patient before it can route or escalate."""
 
 
-class ResolutionType(str, Enum):
-    """How a triage case was ultimately resolved (stored in triage_logs)."""
-
-    AI_AUTO = "AI_AUTO"
-    NURSE_APPROVED = "NURSE_APPROVED"
-    NURSE_CORRECTED = "NURSE_CORRECTED"
-    DOCTOR_CORRECTED = "DOCTOR_CORRECTED"
-
-
-class QueueStatus(str, Enum):
-    """Lifecycle status of a human-triage queue entry."""
-
-    PENDING = "PENDING"
-    RESOLVED = "RESOLVED"
-    TIMEOUT = "TIMEOUT"
-
+# QueueStatus / ResolutionType / QueueItem / PendingQueueResponse /
+# ResolveRequest / ResolveResponse / TimeoutCheckResponse moved to
+# services/queue (Go) in Phase 3 — queue-service now owns human_triage_queue
+# and serves those response shapes directly; this module no longer needs
+# them since the monolith doesn't serve those routes anymore (see api.py).
 
 # ---------------------------------------------------------------------------
 # Chat / Triage endpoint models
@@ -251,92 +239,6 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class QueueItem(BaseModel):
-    """
-    A single entry in the human-triage queue, returned by
-    ``GET /api/v1/queue/pending``.
-    """
-
-    id: UUID = Field(..., description="Primary key of the human_triage_queue row.")
-    patient_id: str = Field(..., description="Opaque patient identifier.")
-    clinical_summary: str = Field(
-        ...,
-        description="AI-generated clinical summary for quick nurse assessment.",
-    )
-    suggested_dept: str | None = Field(
-        default=None,
-        description="Department code the AI suggested (may be None for low-confidence cases).",
-    )
-    status: QueueStatus = Field(..., description="Current lifecycle status.")
-    created_at: datetime = Field(
-        ...,
-        description="Timestamp when the queue entry was created (SLA timer start).",
-    )
-    minutes_waiting: float | None = Field(
-        default=None,
-        description="Minutes elapsed since created_at (computed, not stored in DB).",
-    )
-    sla_breached: bool | None = Field(
-        default=None,
-        description="True when the item has been waiting longer than the configured SLA.",
-    )
-
-    model_config = {"from_attributes": True}
-
-
-class PendingQueueResponse(BaseModel):
-    """Response wrapper for ``GET /api/v1/queue/pending``."""
-
-    total: int = Field(..., description="Total number of pending items returned.")
-    items: list[QueueItem] = Field(..., description="List of pending queue entries.")
-
-
-class ResolveRequest(BaseModel):
-    """
-    Payload sent by the nurse when approving or correcting a triage decision
-    via ``POST /api/v1/queue/resolve``.
-    """
-
-    queue_id: UUID = Field(
-        ...,
-        description="UUID of the human_triage_queue entry to resolve.",
-    )
-    approved_dept: str = Field(
-        ...,
-        description="Department code the nurse approved or corrected to.",
-        examples=["TIM_MACH"],
-    )
-    # No nurse_id field: the resolving nurse's identity comes from the
-    # verified staff session (src/context.py::StaffContext), never the
-    # request body — a client can't attribute a resolution to someone else.
-    resolution_type: ResolutionType = Field(
-        default=ResolutionType.NURSE_APPROVED,
-        description=(
-            "Whether the nurse agreed with the AI suggestion (NURSE_APPROVED) "
-            "or overrode it (NURSE_CORRECTED)."
-        ),
-    )
-    notes: str | None = Field(
-        default=None,
-        max_length=1_000,
-        description="Optional free-text notes from the nurse.",
-    )
-
-
-class ResolveResponse(BaseModel):
-    """Response returned after a nurse resolves a queue entry."""
-
-    success: bool = Field(..., description="Whether the resolution succeeded.")
-    queue_id: UUID = Field(..., description="The resolved queue entry UUID.")
-    final_dept: str = Field(
-        ..., description="Department code that was ultimately assigned."
-    )
-    resolution_type: ResolutionType = Field(
-        ..., description="How the case was resolved."
-    )
-    message: str = Field(..., description="Human-readable confirmation message.")
-
-
 # ---------------------------------------------------------------------------
 # Appointment models
 # ---------------------------------------------------------------------------
@@ -383,16 +285,6 @@ class SeedRedFlagsResponse(BaseModel):
 # Timeout check models
 # ---------------------------------------------------------------------------
 
-
-class TimeoutCheckResponse(BaseModel):
-    """Response returned by ``POST /api/v1/queue/check-timeouts``."""
-
-    success: bool
-    timed_out_count: int = Field(
-        ...,
-        description="Number of queue items that were marked TIMEOUT in this run.",
-    )
-    message: str
 
 
 # ---------------------------------------------------------------------------

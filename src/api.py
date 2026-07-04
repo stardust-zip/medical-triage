@@ -6,10 +6,12 @@ Endpoints
 GET  /                              – Root info
 GET  /health                        – Health check (DB ping + system metrics)
 POST /api/v1/chat/triage            – Main patient triage chat endpoint
-GET  /api/v1/queue/pending          – Nurse dashboard: list pending queue items
-POST /api/v1/queue/resolve          – Nurse resolves / approves a queue item
-POST /api/v1/queue/check-timeouts   – SLA sweep: mark stale PENDING items TIMEOUT
 POST /api/v1/admin/seed-red-flags   – Seed red-flag embeddings into DB (one-time)
+
+Nurse-queue endpoints (GET /api/v1/queue/pending, POST /api/v1/queue/resolve,
+POST /api/v1/queue/check-timeouts) moved to queue-service (Go) in Phase 3 —
+api-gateway routes them there directly now, this backend no longer serves
+them at all (see services/queue and services/gateway/main.go).
 """
 
 from __future__ import annotations
@@ -18,7 +20,6 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any
 
 import psutil
@@ -34,9 +35,6 @@ from slowapi.util import get_remote_address
 from .agent import (
     create_appointment,
     db_connection,
-    get_pending_queue,
-    mark_timed_out_items,
-    resolve_queue_item,
     run_triage_pipeline,
     seed_red_flags,
 )
@@ -51,14 +49,7 @@ from .schema import (
     DoctorInfo,
     EmergencyResult,
     ErrorResponse,
-    PendingQueueResponse,
-    QueueItem,
-    QueueStatus,
-    ResolutionType,
-    ResolveRequest,
-    ResolveResponse,
     SeedRedFlagsResponse,
-    TimeoutCheckResponse,
     TriageFlow,
     TriageResult,
 )
@@ -245,7 +236,6 @@ def health_check():
             "embedding_model": settings.OPENAI_EMBEDDING_MODEL,
             "red_flag_threshold": settings.RED_FLAG_SIMILARITY_THRESHOLD,
             "human_triage_threshold": settings.HUMAN_TRIAGE_CONFIDENCE_THRESHOLD,
-            "sla_minutes": settings.QUEUE_SLA_MINUTES,
         },
     }
 
@@ -433,216 +423,6 @@ async def chat_triage(
         status="success",
         flow=flow,
         result=triage_result,
-    )
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/queue/pending
-# ---------------------------------------------------------------------------
-
-
-@app.get(
-    "/api/v1/queue/pending",
-    response_model=PendingQueueResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["Nurse Queue"],
-    summary="List all pending triage queue items",
-    responses={
-        200: {"description": "List of pending queue items for the nurse dashboard"},
-        503: {"description": "Database unavailable"},
-    },
-)
-@limiter.limit("60/minute")
-async def get_pending_queue_endpoint(
-    request: Request,  # noqa: ARG001
-    ctx: StaffContext = Depends(require_roles("NURSE", "ADMIN", "OWNER")),
-):
-    """
-    Nurse dashboard polling endpoint.
-
-    Returns all ``PENDING`` entries in ``human_triage_queue`` for the caller's
-    tenant (Postgres RLS scopes this — see src/agent.py::_set_org_context),
-    ordered oldest-first so the highest-SLA-risk cases appear at the top.
-    Each item includes a computed ``minutes_waiting`` field and a
-    ``sla_breached`` flag.
-    """
-    try:
-        async with db_connection(ctx.org_id) as conn:
-            rows = await get_pending_queue(conn)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to fetch pending queue: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Không thể kết nối cơ sở dữ liệu. Vui lòng thử lại.",
-        ) from exc
-
-    now = datetime.now(timezone.utc)
-    items: list[QueueItem] = []
-
-    for row in rows:
-        created_at: datetime = row["created_at"]
-        # Ensure timezone-aware for arithmetic
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-
-        minutes_waiting = (now - created_at).total_seconds() / 60.0
-        sla_breached = minutes_waiting >= settings.QUEUE_SLA_MINUTES
-
-        items.append(
-            QueueItem(
-                id=row["id"],
-                patient_id=row["patient_id"],
-                clinical_summary=row["clinical_summary"],
-                suggested_dept=row.get("suggested_dept"),
-                status=QueueStatus(row["status"]),
-                created_at=created_at,
-                minutes_waiting=round(minutes_waiting, 2),
-                sla_breached=sla_breached,
-            )
-        )
-
-    return PendingQueueResponse(total=len(items), items=items)
-
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/queue/resolve
-# ---------------------------------------------------------------------------
-
-
-@app.post(
-    "/api/v1/queue/resolve",
-    response_model=ResolveResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["Nurse Queue"],
-    summary="Nurse resolves a pending triage queue item",
-    responses={
-        200: {"description": "Queue item resolved successfully"},
-        404: {"description": "Queue item not found or already resolved"},
-        503: {"description": "Database unavailable"},
-    },
-)
-@limiter.limit("30/minute")
-async def resolve_queue_endpoint(
-    request: Request,  # noqa: ARG001
-    body: ResolveRequest,
-    ctx: StaffContext = Depends(require_roles("NURSE", "ADMIN", "OWNER")),
-):
-    """
-    Nurse approves or corrects a triage decision.
-
-    - Sets ``human_triage_queue.status = 'RESOLVED'``.
-    - Back-fills ``triage_logs.final_dept`` and ``resolution_type`` to
-      reinforce the semantic memory flywheel.
-
-    Set ``resolution_type = NURSE_APPROVED`` when the AI suggestion was
-    correct, or ``NURSE_CORRECTED`` when the nurse changed the department.
-    The resolving nurse's identity is the verified staff session
-    (``ctx.user_id`` / ``ctx.email``), never a client-supplied field.
-    """
-    queue_id_str = str(body.queue_id)
-
-    try:
-        async with db_connection(ctx.org_id) as conn:
-            updated = await resolve_queue_item(
-                conn=conn,
-                queue_id=queue_id_str,
-                approved_dept=body.approved_dept,
-                resolution_type=body.resolution_type.value,
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Failed to resolve queue item %s: %s", queue_id_str, exc, exc_info=True
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Không thể cập nhật cơ sở dữ liệu. Vui lòng thử lại.",
-        ) from exc
-
-    if not updated:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Không tìm thấy mục chờ với ID {queue_id_str} "
-                "hoặc mục này đã được xử lý."
-            ),
-        )
-
-    logger.info(
-        "Queue resolved: id=%s nurse=%s (%s) dept=%s type=%s",
-        queue_id_str,
-        ctx.user_id,
-        ctx.email,
-        body.approved_dept,
-        body.resolution_type.value,
-    )
-
-    action = (
-        "Đã duyệt"
-        if body.resolution_type == ResolutionType.NURSE_APPROVED
-        else "Đã sửa"
-    )
-
-    return ResolveResponse(
-        success=True,
-        queue_id=body.queue_id,
-        final_dept=body.approved_dept,
-        resolution_type=body.resolution_type,
-        message=(
-            f"{action}: bệnh nhân được điều phối đến khoa {body.approved_dept} "
-            f"bởi điều dưỡng {ctx.email or ctx.user_id}."
-        ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/queue/check-timeouts
-# ---------------------------------------------------------------------------
-
-
-@app.post(
-    "/api/v1/queue/check-timeouts",
-    response_model=TimeoutCheckResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["Nurse Queue"],
-    summary="Mark stale PENDING items as TIMEOUT (SLA sweep)",
-    responses={
-        200: {"description": "Timeout sweep completed"},
-        503: {"description": "Database unavailable"},
-    },
-)
-@limiter.limit("10/minute")
-async def check_timeouts_endpoint(
-    request: Request,  # noqa: ARG001
-    ctx: StaffContext = Depends(require_roles("NURSE", "ADMIN", "OWNER")),
-):
-    """
-    SLA enforcement sweep, scoped to the caller's tenant.
-
-    Marks every ``PENDING`` queue item whose ``created_at`` is older than
-    ``QUEUE_SLA_MINUTES`` (default: 3 min) as ``TIMEOUT``.
-
-    This endpoint can be called:
-    - On a schedule from an external cron / Supabase Edge Function.
-    - Manually from the nurse dashboard.
-    - As a background task triggered by other endpoints.
-    """
-    try:
-        async with db_connection(ctx.org_id) as conn:
-            count = await mark_timed_out_items(conn, settings.QUEUE_SLA_MINUTES)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Timeout sweep failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Không thể thực hiện kiểm tra SLA. Vui lòng thử lại.",
-        ) from exc
-
-    return TimeoutCheckResponse(
-        success=True,
-        timed_out_count=count,
-        message=(
-            f"Đã đánh dấu {count} mục TIMEOUT "
-            f"(SLA = {settings.QUEUE_SLA_MINUTES} phút)."
-        ),
     )
 
 

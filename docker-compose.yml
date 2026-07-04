@@ -35,6 +35,8 @@ services:
     environment:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL is required. Run ./setup.sh or create .env.}
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      QUEUE_SERVICE_URL: "http://queue:8083"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-local-missing-openai-key}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -42,6 +44,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      queue:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
       interval: 15s
@@ -59,6 +63,22 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # queue-service owns human_triage_queue as of Phase 3 (see services/queue).
+  # No published port: reached server-to-server by the monolith (internal
+  # secret) and by api-gateway (gateway secret), same trust model as
+  # identity/api above.
+  queue:
+    build: ./services/queue
+    expose:
+      - "8083"
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL is required. Run ./setup.sh or create .env.}
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   gateway:
     build: ./services/gateway
     ports:
@@ -67,6 +87,7 @@ services:
       PORT: "8080"
       BACKEND_URL: "http://api:8000"
       IDENTITY_URL: "http://identity:8082"
+      QUEUE_SERVICE_URL: "http://queue:8083"
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required. Run ./setup.sh or create .env.}
@@ -75,6 +96,8 @@ services:
       api:
         condition: service_healthy
       identity:
+        condition: service_started
+      queue:
         condition: service_started
 
   frontend:
