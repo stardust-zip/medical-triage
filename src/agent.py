@@ -17,7 +17,7 @@ import logging
 import re
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 import psycopg2
 import psycopg2.extras
@@ -288,16 +288,31 @@ async def get_embedding(text: str) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
+# A medical safety check has exactly three honest outcomes: a real red flag
+# fired, a real red flag did not fire, or the check itself couldn't be
+# completed. Collapsing the third case into "did not fire" (fail-open) is
+# the bug this type exists to make impossible to reintroduce by accident —
+# every caller must handle CHECK_FAILED explicitly instead of it silently
+# behaving like SAFE.
+RedFlagStatus = Literal["EMERGENCY", "SAFE", "CHECK_FAILED"]
+
+
 async def check_red_flags(
     symptoms_text: str,
     conn: Any,  # psycopg2 connection
-) -> tuple[bool, str, float]:
+) -> tuple[RedFlagStatus, str, float]:
     """
     Check whether *symptoms_text* semantically matches any red-flag keyword.
 
     Embeds the symptoms text and performs a pgvector cosine-similarity query
-    against the ``red_flags`` table.  Returns ``True`` (emergency) if the
-    top-1 similarity exceeds ``settings.RED_FLAG_SIMILARITY_THRESHOLD``.
+    against the ``red_flags`` table.  Returns ``"EMERGENCY"`` if the top-1
+    similarity exceeds ``settings.RED_FLAG_SIMILARITY_THRESHOLD``.
+
+    Fails *safe*, not open: any error that prevents the check from actually
+    running (embedding API failure, DB error, an empty/unseeded red_flags
+    table) is reported as ``"CHECK_FAILED"``, never as ``"SAFE"``. Callers
+    must treat ``"CHECK_FAILED"`` with the same urgency as ``"EMERGENCY"`` —
+    see ``run_triage_pipeline``.
 
     Parameters
     ----------
@@ -308,8 +323,10 @@ async def check_red_flags(
 
     Returns
     -------
-    tuple[bool, str, float]
-        ``(is_emergency, matched_keyword, similarity_score)``
+    tuple[RedFlagStatus, str, float]
+        ``(status, matched_keyword, similarity_score)``. ``matched_keyword``
+        and ``similarity_score`` are only meaningful when ``status`` is
+        ``"EMERGENCY"`` or ``"SAFE"``.
     """
     try:
         embedding = await get_embedding(symptoms_text)
@@ -329,8 +346,14 @@ async def check_red_flags(
             row = cur.fetchone()
 
         if row is None:
-            logger.warning("red_flags table is empty – skipping red-flag check.")
-            return False, "", 0.0
+            # An empty red_flags table means the safety net was never
+            # seeded — the check ran but could never have caught anything.
+            # That's a "couldn't verify", not a "verified safe".
+            logger.error(
+                "red_flags table is empty – emergency check cannot run; "
+                "failing safe."
+            )
+            return "CHECK_FAILED", "", 0.0
 
         keyword: str = row["keyword"]
         similarity: float = float(row["similarity"])
@@ -340,14 +363,15 @@ async def check_red_flags(
         )
 
         if similarity >= settings.RED_FLAG_SIMILARITY_THRESHOLD:
-            return True, keyword, similarity
+            return "EMERGENCY", keyword, similarity
 
-        return False, keyword, similarity
+        return "SAFE", keyword, similarity
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Red-flag check failed: %s", exc, exc_info=True)
-        # Fail open – do NOT trigger emergency on DB/embedding error
-        return False, "", 0.0
+        # Fail safe – an error here means we don't know if this is an
+        # emergency, so we must not tell the pipeline it's safe to proceed.
+        return "CHECK_FAILED", "", 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1018,17 +1042,32 @@ async def run_triage_pipeline(
 
             if function_name == "check_emergency":
                 if conn:
-                    is_emergency, keyword, sim = await check_red_flags(
+                    check_status, keyword, sim = await check_red_flags(
                         args["symptoms"], conn
                     )
-                    if is_emergency:
-                        result["flow"] = "EMERGENCY"
-                        result["matched_keyword"] = keyword
-                        result["similarity_score"] = sim
-                        return result  # Ngắt ngay lập tức
-                    tool_result = "No emergency detected. Safe to proceed."
                 else:
-                    tool_result = "DB unavailable, proceed with caution."
+                    # No DB connection means the check can't run at all —
+                    # same fail-safe outcome as any other check failure.
+                    check_status, keyword, sim = "CHECK_FAILED", "", 0.0
+
+                if check_status in ("EMERGENCY", "CHECK_FAILED"):
+                    if check_status == "CHECK_FAILED":
+                        logger.error(
+                            "Emergency check failed for org=%s patient=%s — "
+                            "failing safe to the EMERGENCY flow instead of "
+                            "letting the agent continue unverified.",
+                            org_id,
+                            patient_id,
+                        )
+                    result["flow"] = "EMERGENCY"
+                    result["matched_keyword"] = (
+                        keyword
+                        if check_status == "EMERGENCY"
+                        else "Không thể xác minh mức độ khẩn cấp – vui lòng gọi 115 ngay"
+                    )
+                    result["similarity_score"] = sim
+                    return result  # Ngắt ngay lập tức
+                tool_result = "No emergency detected. Safe to proceed."
 
             elif function_name == "escalate_to_human_nurse":
                 result["flow"] = "PENDING_HUMAN"

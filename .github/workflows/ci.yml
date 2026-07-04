@@ -48,6 +48,61 @@ jobs:
       - name: Test Python
         run: pytest
 
+  # Phase 2 (Safety-Critical AI Hardening): automated red-flag recall/
+  # precision eval + prompt-injection regression tests against the real
+  # embedding/chat model (tests/test_red_flag_eval.py,
+  # tests/test_injection_regression.py). The fake per-job OPENAI_API_KEY
+  # from write_ci_env.sh can't produce real model output, so these are
+  # skipped in the `python` job above and only run here, fed a real key from
+  # the EVAL_OPENAI_API_KEY repo secret.
+  #
+  # KNOWN GAP: until that secret is added, this job's tests are collected
+  # but skipped (a green, vacuous pass) — add the secret and mark this job
+  # required in branch protection to make it actually gate merges.
+  redflag-eval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: triageos
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d triageos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Generate CI environment
+        run: scripts/write_ci_env.sh
+
+      - name: Apply database migrations
+        run: python scripts/migrate.py
+
+      - name: Use real OpenAI key for the eval suite (if configured)
+        if: ${{ secrets.EVAL_OPENAI_API_KEY != '' }}
+        env:
+          EVAL_OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
+        run: echo "OPENAI_API_KEY=${EVAL_OPENAI_API_KEY}" >> "$GITHUB_ENV"
+
+      - name: Red-flag recall/precision + injection regression eval
+        run: pytest tests/test_red_flag_eval.py tests/test_injection_regression.py -v
+
   go:
     runs-on: ubuntu-latest
     strategy:

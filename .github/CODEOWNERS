@@ -1,0 +1,9 @@
+# Phase 2 (Safety-Critical AI Hardening): threshold changes
+# (RED_FLAG_SIMILARITY_THRESHOLD, confidence cutoffs) and the emergency-check
+# logic they gate must go through code review, not just CI. Requires branch
+# protection to enable "Require review from Code Owners" for this to
+# actually block a merge — this file alone only declares who that is.
+
+src/config.py           @stardust-zip
+src/agent.py            @stardust-zip
+db/init.sql             @stardust-zip
