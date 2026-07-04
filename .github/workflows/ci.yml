@@ -94,8 +94,12 @@ jobs:
       - name: Apply database migrations
         run: python scripts/migrate.py
 
+      # `secrets` isn't a valid context in step `if:` conditions (only in
+      # `env:`/`with:`), so this always runs — falling back to an empty
+      # OPENAI_API_KEY when EVAL_OPENAI_API_KEY isn't configured, which
+      # tests/_eval_support.py::has_real_openai_key() treats the same as a
+      # missing key: the eval suite skips itself instead of failing.
       - name: Use real OpenAI key for the eval suite (if configured)
-        if: ${{ secrets.EVAL_OPENAI_API_KEY != '' }}
         env:
           EVAL_OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
         run: echo "OPENAI_API_KEY=${EVAL_OPENAI_API_KEY}" >> "$GITHUB_ENV"
