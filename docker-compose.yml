@@ -1,24 +1,63 @@
 services:
-  # FastAPI monolith – Phase 1 keeps it as-is behind api-gateway (the routing
-  # seam for later service extractions). No published port: only the gateway
-  # talks to it, enforced by GATEWAY_SHARED_SECRET (see src/context.py).
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-triageos}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required. Run ./setup.sh or create .env.}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d triageos"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: .
+    command: ["python", "scripts/migrate.py"]
+    environment:
+      ADMIN_DATABASE_URL: ${COMPOSE_ADMIN_DATABASE_URL:?COMPOSE_ADMIN_DATABASE_URL is required. Run ./setup.sh or create .env.}
+      APP_DB_USER: ${APP_DB_USER:-triageos_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required. Run ./setup.sh or create .env.}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # FastAPI monolith stays behind api-gateway. No published port: only the
+  # gateway talks to it, enforced by GATEWAY_SHARED_SECRET (see src/context.py).
   api:
     build: .
     expose:
       - "8000"
-    volumes:
-      - ./src:/app/src
-    env_file:
-      - .env
-    stdin_open: true
-    tty: true
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL is required. Run ./setup.sh or create .env.}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-local-missing-openai-key}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
   identity:
     build: ./services/identity
     expose:
       - "8082"
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL is required. Run ./setup.sh or create .env.}
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   gateway:
     build: ./services/gateway
@@ -28,8 +67,28 @@ services:
       PORT: "8080"
       BACKEND_URL: "http://api:8000"
       IDENTITY_URL: "http://identity:8082"
-    env_file:
-      - .env
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required. Run ./setup.sh or create .env.}
+      PATIENT_SESSION_SECRET: ${PATIENT_SESSION_SECRET:?PATIENT_SESSION_SECRET is required. Run ./setup.sh or create .env.}
     depends_on:
-      - api
-      - identity
+      api:
+        condition: service_healthy
+      identity:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_ORG_SLUG: evergreen-demo
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+
+volumes:
+  postgres-data:

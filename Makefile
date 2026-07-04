@@ -1,21 +1,42 @@
-.PHONY: up down logs build shell
+.PHONY: bootstrap up down logs build migrate goose-version test test-python test-go test-frontend ci ps
+
+bootstrap:
+	./setup.sh
 
 up:
-	@echo "🚀 Đang khởi động AI Server..."
 	docker compose up -d
 
 down:
-	@echo "🛑 Đang tắt Server..."
 	docker compose down
 
 logs:
-	@echo "📋 Đang theo dõi log (Bấm Ctrl+C để thoát)..."
-	docker compose logs -f api
+	docker compose logs -f
 
 build:
-	@echo "🔨 Đang build lại Docker image..."
 	docker compose build
 
-shell:
-	@echo "💻 Đang vào container..."
-	docker exec -it vinuni-ai-agent bash
+migrate:
+	docker compose run --rm migrate
+
+goose-version:
+	docker build -t triageos-goose ./tools/goose
+	docker run --rm -v $(PWD)/db/goose:/migrations triageos-goose --version
+
+test: test-python test-go test-frontend
+
+test-python:
+	pytest
+
+test-go:
+	cd services/gateway && go test ./...
+	cd services/identity && go test ./...
+
+test-frontend:
+	cd frontend && npm ci && npm audit --audit-level=moderate && npm run lint && npm run build
+
+ci: test
+	docker compose config
+	docker compose build
+
+ps:
+	docker compose ps
