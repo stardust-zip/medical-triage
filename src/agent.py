@@ -17,7 +17,7 @@ import logging
 import re
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 import psycopg2
 import psycopg2.extras
@@ -288,28 +288,22 @@ async def get_embedding(text: str) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
+# Fail-safe, not fail-open: CHECK_FAILED must never collapse into SAFE.
+RedFlagStatus = Literal["EMERGENCY", "SAFE", "CHECK_FAILED"]
+
+
 async def check_red_flags(
     symptoms_text: str,
     conn: Any,  # psycopg2 connection
-) -> tuple[bool, str, float]:
+) -> tuple[RedFlagStatus, str, float]:
     """
     Check whether *symptoms_text* semantically matches any red-flag keyword.
 
-    Embeds the symptoms text and performs a pgvector cosine-similarity query
-    against the ``red_flags`` table.  Returns ``True`` (emergency) if the
-    top-1 similarity exceeds ``settings.RED_FLAG_SIMILARITY_THRESHOLD``.
-
-    Parameters
-    ----------
-    symptoms_text:
-        Cleaned symptom text (already de-identified).
-    conn:
-        Active psycopg2 connection to the Supabase/Postgres database.
-
-    Returns
-    -------
-    tuple[bool, str, float]
-        ``(is_emergency, matched_keyword, similarity_score)``
+    Returns ``"EMERGENCY"`` if the top-1 cosine similarity against the
+    ``red_flags`` table exceeds ``settings.RED_FLAG_SIMILARITY_THRESHOLD``,
+    ``"SAFE"`` otherwise, or ``"CHECK_FAILED"`` if the check couldn't run at
+    all (embedding/DB error, empty table) — callers must treat that the same
+    as ``"EMERGENCY"``, see ``run_triage_pipeline``.
     """
     try:
         embedding = await get_embedding(symptoms_text)
@@ -329,8 +323,11 @@ async def check_red_flags(
             row = cur.fetchone()
 
         if row is None:
-            logger.warning("red_flags table is empty – skipping red-flag check.")
-            return False, "", 0.0
+            logger.error(
+                "red_flags table is empty – emergency check cannot run; "
+                "failing safe."
+            )
+            return "CHECK_FAILED", "", 0.0
 
         keyword: str = row["keyword"]
         similarity: float = float(row["similarity"])
@@ -340,14 +337,13 @@ async def check_red_flags(
         )
 
         if similarity >= settings.RED_FLAG_SIMILARITY_THRESHOLD:
-            return True, keyword, similarity
+            return "EMERGENCY", keyword, similarity
 
-        return False, keyword, similarity
+        return "SAFE", keyword, similarity
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Red-flag check failed: %s", exc, exc_info=True)
-        # Fail open – do NOT trigger emergency on DB/embedding error
-        return False, "", 0.0
+        return "CHECK_FAILED", "", 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1018,17 +1014,28 @@ async def run_triage_pipeline(
 
             if function_name == "check_emergency":
                 if conn:
-                    is_emergency, keyword, sim = await check_red_flags(
+                    check_status, keyword, sim = await check_red_flags(
                         args["symptoms"], conn
                     )
-                    if is_emergency:
-                        result["flow"] = "EMERGENCY"
-                        result["matched_keyword"] = keyword
-                        result["similarity_score"] = sim
-                        return result  # Ngắt ngay lập tức
-                    tool_result = "No emergency detected. Safe to proceed."
                 else:
-                    tool_result = "DB unavailable, proceed with caution."
+                    check_status, keyword, sim = "CHECK_FAILED", "", 0.0
+
+                if check_status in ("EMERGENCY", "CHECK_FAILED"):
+                    if check_status == "CHECK_FAILED":
+                        logger.error(
+                            "Emergency check failed for org=%s patient=%s — failing safe",
+                            org_id,
+                            patient_id,
+                        )
+                    result["flow"] = "EMERGENCY"
+                    result["matched_keyword"] = (
+                        keyword
+                        if check_status == "EMERGENCY"
+                        else "Không thể xác minh mức độ khẩn cấp – vui lòng gọi 115 ngay"
+                    )
+                    result["similarity_score"] = sim
+                    return result  # Ngắt ngay lập tức
+                tool_result = "No emergency detected. Safe to proceed."
 
             elif function_name == "escalate_to_human_nurse":
                 result["flow"] = "PENDING_HUMAN"
