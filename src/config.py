@@ -67,6 +67,16 @@ class Settings:
     INTERNAL_SHARED_SECRET: str = os.environ["INTERNAL_SHARED_SECRET"]
 
     # ------------------------------------------------------------------
+    # scheduling-service (Phase 4)
+    # ------------------------------------------------------------------
+    # departments/doctors/clinics/appointments moved to scheduling-service
+    # (Go); reached the same way as queue-service, via INTERNAL_SHARED_SECRET
+    # above (see agent.py::get_doctors_by_department, create_appointment).
+    SCHEDULING_SERVICE_URL: str = os.getenv(
+        "SCHEDULING_SERVICE_URL", "http://localhost:8084"
+    )
+
+    # ------------------------------------------------------------------
     # Langfuse observability
     # ------------------------------------------------------------------
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")

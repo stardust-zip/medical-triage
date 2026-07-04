@@ -96,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [gateway, identity, queue]
+        service: [gateway, identity, queue, scheduling]
     steps:
       - uses: actions/checkout@v4
 

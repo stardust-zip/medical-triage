@@ -239,6 +239,11 @@ function DoctorSelectionBubble({
   const [error, setError] = useState<string | null>(null);
   const timeSlots = getTimeSlots();
 
+  // One idempotency key per booking widget instance (Phase 4): if handleBook
+  // is retried after a dropped response, scheduling-service returns the
+  // original booking instead of creating a duplicate.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+
   const handleBook = async () => {
     if (!selectedDoctor || !selectedSlot) return;
     setBooking(true);
@@ -250,7 +255,8 @@ function DoctorSelectionBubble({
           department_code: departmentCode,
           appointment_time: selectedSlot,
         },
-        patientToken
+        patientToken,
+        idempotencyKey
       );
       setBooked(res.message);
     } catch (err: unknown) {

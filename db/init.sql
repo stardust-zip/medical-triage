@@ -260,6 +260,13 @@ CREATE INDEX IF NOT EXISTS idx_doctors_dept ON doctors (org_id, department_code)
 --
 -- patient_id holds the anonymous, gateway-issued patient-session id (see
 -- human_triage_queue comment above – same convention).
+--
+-- idempotency_key (Phase 4): the client-supplied Idempotency-Key header
+-- (see §5.1). scheduling-service looks up (org_id, idempotency_key) before
+-- inserting, so a retried booking request returns the original appointment
+-- instead of creating a duplicate. Nullable + a partial unique index (not a
+-- plain UNIQUE column) because most-legacy/internal bookings don't send one
+-- and Postgres already treats multiple NULLs in a unique index as distinct.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS appointments (
@@ -269,11 +276,22 @@ CREATE TABLE IF NOT EXISTS appointments (
     doctor_id        UUID         NOT NULL,
     department_code  VARCHAR(50)  NOT NULL,
     appointment_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    idempotency_key  VARCHAR(255),
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     FOREIGN KEY (org_id, doctor_id) REFERENCES doctors (org_id, id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_appointments_org ON appointments (org_id);
+
+-- Double-booking prevention (Phase 4): the same doctor can't hold two
+-- appointments at the exact same instant within a tenant. A concurrent
+-- INSERT racing past the app-layer check still hits this at the DB level.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_no_double_booking
+    ON appointments (org_id, doctor_id, appointment_time);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_idempotency_key
+    ON appointments (org_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Seed: clinics (one per department)

@@ -239,31 +239,10 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Appointment models
-# ---------------------------------------------------------------------------
-
-
-class AppointmentRequest(BaseModel):
-    """Payload sent by the patient to book an appointment with a specific doctor."""
-
-    # No patient_id field – identity comes from the verified patient session
-    # (src/context.py::PatientContext), same as ChatRequest.
-    doctor_id: str = Field(..., description="UUID of the chosen doctor.")
-    department_code: str = Field(..., description="Department code.")
-    appointment_time: str = Field(
-        ...,
-        description="ISO 8601 datetime string for the appointment (e.g. '2026-04-10T08:00:00+07:00').",
-    )
-
-
-class AppointmentResponse(BaseModel):
-    """Response returned after successfully booking an appointment."""
-
-    success: bool
-    appointment_id: str = Field(..., description="UUID of the created appointment record.")
-    message: str = Field(..., description="Patient-facing confirmation message.")
-
+# AppointmentRequest / AppointmentResponse moved to services/scheduling (Go)
+# in Phase 4 — scheduling-service now serves POST /api/v1/appointments
+# directly (api-gateway routes it there), so this module no longer needs
+# them.
 
 # ---------------------------------------------------------------------------
 # Admin / seeding models

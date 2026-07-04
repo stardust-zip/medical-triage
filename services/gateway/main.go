@@ -26,6 +26,7 @@ type config struct {
 	port                 string
 	backendURL           *url.URL
 	queueServiceURL      *url.URL
+	schedulingServiceURL *url.URL
 	identity             *identityClient
 	supabaseJWTSecret    string
 	patientSessionSecret string
@@ -42,11 +43,16 @@ func loadConfig() config {
 	if err != nil {
 		log.Fatalf("invalid QUEUE_SERVICE_URL: %v", err)
 	}
+	schedulingService, err := url.Parse(getenv("SCHEDULING_SERVICE_URL", "http://localhost:8084"))
+	if err != nil {
+		log.Fatalf("invalid SCHEDULING_SERVICE_URL: %v", err)
+	}
 
 	return config{
 		port:                 getenv("PORT", "8080"),
 		backendURL:           backend,
 		queueServiceURL:      queueService,
+		schedulingServiceURL: schedulingService,
 		identity:             newIdentityClient(getenv("IDENTITY_URL", "http://localhost:8082"), mustGetenv("INTERNAL_SHARED_SECRET")),
 		supabaseJWTSecret:    mustGetenv("SUPABASE_JWT_SECRET"),
 		patientSessionSecret: mustGetenv("PATIENT_SESSION_SECRET"),
@@ -81,6 +87,11 @@ func main() {
 	queueProxy := httputil.NewSingleHostReverseProxy(cfg.queueServiceURL)
 	queueProxy.Director = withGatewaySecret(cfg, queueProxy.Director)
 
+	// scheduling-service owns departments/doctors/clinics/appointments as of
+	// Phase 4 — same deal, the monolith no longer serves this route either.
+	schedulingProxy := httputil.NewSingleHostReverseProxy(cfg.schedulingServiceURL)
+	schedulingProxy.Director = withGatewaySecret(cfg, schedulingProxy.Director)
+
 	mux := http.NewServeMux()
 
 	// Patient-facing: mint an anonymous, token-bound session. No login.
@@ -88,7 +99,7 @@ func main() {
 
 	// Patient-facing: require a valid patient-session token.
 	mux.Handle("POST /api/v1/chat/triage", requirePatientSession(cfg, proxy))
-	mux.Handle("POST /api/v1/appointments", requirePatientSession(cfg, proxy))
+	mux.Handle("POST /api/v1/appointments", requirePatientSession(cfg, schedulingProxy))
 
 	// Staff-facing: require a valid Supabase JWT + resolved tenant/role.
 	mux.Handle("GET /api/v1/queue/pending", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))

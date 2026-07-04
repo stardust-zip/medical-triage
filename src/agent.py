@@ -733,11 +733,13 @@ async def seed_red_flags(conn: Any, keywords: list[str]) -> int:
 
 
 async def get_doctors_by_department(
-    conn: Any,
+    org_id: str,
     department_code: str,
 ) -> list[dict[str, Any]]:
     """
-    Fetch up to 5 doctors for the given *department_code*.
+    Fetch up to 5 doctors for *department_code* via scheduling-service's
+    internal API (Phase 4 — departments/doctors/clinics/appointments moved
+    out of this monolith into services/scheduling).
 
     Returns
     -------
@@ -745,30 +747,27 @@ async def get_doctors_by_department(
         Each dict has keys: ``id``, ``name``, ``specialty``, ``department_code``.
     """
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(
-                """
-                SELECT id::text, name, specialty, department_code
-                FROM   doctors
-                WHERE  department_code = %s
-                ORDER  BY name
-                LIMIT  5
-                """,
-                (department_code,),
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"{settings.SCHEDULING_SERVICE_URL}/internal/scheduling/doctors",
+                params={"org_id": org_id, "department_code": department_code},
+                headers={"X-Internal-Secret": settings.INTERNAL_SHARED_SECRET},
             )
-            rows = cur.fetchall()
-        return [dict(r) for r in rows]
+            response.raise_for_status()
+            doctors: list[dict[str, Any]] = response.json()["doctors"]
+            return doctors
     except Exception as exc:  # noqa: BLE001
         logger.warning("get_doctors_by_department failed: %s", exc)
         return []
 
 
 async def get_clinics_by_department(
-    conn: Any,
+    org_id: str,
     department_code: str,
 ) -> list[dict[str, Any]]:
     """
-    Fetch all clinics that serve *department_code* (across all branches).
+    Fetch all clinics serving *department_code* via scheduling-service's
+    internal API (Phase 4).
 
     Returns
     -------
@@ -776,52 +775,62 @@ async def get_clinics_by_department(
         Each dict has keys ``name``, ``address``.
     """
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(
-                """
-                SELECT name, address
-                FROM   clinics
-                WHERE  department_code = %s
-                ORDER  BY name
-                """,
-                (department_code,),
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"{settings.SCHEDULING_SERVICE_URL}/internal/scheduling/clinics",
+                params={"org_id": org_id, "department_code": department_code},
+                headers={"X-Internal-Secret": settings.INTERNAL_SHARED_SECRET},
             )
-            rows = cur.fetchall()
-        return [dict(r) for r in rows]
+            response.raise_for_status()
+            clinics: list[dict[str, Any]] = response.json()["clinics"]
+            return clinics
     except Exception as exc:  # noqa: BLE001
         logger.warning("get_clinics_by_department failed: %s", exc)
         return []
 
 
 async def create_appointment(
-    conn: Any,
-    patient_id: str,
+    org_id: str,
+    patient_session_id: str,
     doctor_id: str,
     department_code: str,
     appointment_time: str,
 ) -> str:
     """
-    Insert a new appointment row and return its UUID string.
+    Book an appointment via scheduling-service's internal API (Phase 4).
+
+    Called from the ``book_appointment`` chat tool — a server-to-server
+    call authenticated the same way as ``create_queue_item``, never routed
+    through api-gateway. No ``Idempotency-Key`` here: the agentic loop only
+    invokes this tool once per booking decision, unlike the patient-facing
+    ``POST /api/v1/appointments`` route (which api-gateway now routes
+    directly to scheduling-service, see services/gateway/main.go), where a
+    client retry is the exact case that header exists to make safe.
 
     Parameters
     ----------
     appointment_time:
         ISO 8601 string (e.g. ``"2026-04-10T08:00:00+07:00"``).
     """
-    appt_id = str(uuid.uuid4())
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO appointments
-                (id, org_id, patient_id, doctor_id, department_code, appointment_time)
-            VALUES (%s, current_setting('app.org_id')::uuid, %s, %s::uuid, %s, %s::timestamptz)
-            """,
-            (appt_id, patient_id, doctor_id, department_code, appointment_time),
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.post(
+            f"{settings.SCHEDULING_SERVICE_URL}/internal/scheduling/appointments",
+            json={
+                "org_id": org_id,
+                "patient_session_id": patient_session_id,
+                "doctor_id": doctor_id,
+                "department_code": department_code,
+                "appointment_time": appointment_time,
+            },
+            headers={"X-Internal-Secret": settings.INTERNAL_SHARED_SECRET},
         )
+        response.raise_for_status()
+        appt_id: str = response.json()["appointment_id"]
+
     logger.info(
         "Appointment created: id=%s patient=%s doctor=%s",
         appt_id,
-        patient_id,
+        patient_session_id,
         doctor_id,
     )
     return appt_id
@@ -964,27 +973,29 @@ async def run_triage_pipeline(
                 )
                 return result
             elif function_name == "book_appointment":
-                if conn:
-                    # Gọi hàm helper sẵn có trong agent.py để ghi vào CSDL
+                try:
                     await create_appointment(
-                        conn=conn,
-                        patient_id=patient_id,
+                        org_id=org_id,
+                        patient_session_id=patient_id,
                         doctor_id=args["doctor_id"],
                         department_code=args["department_code"],
                         appointment_time=args["appointment_time"],
                     )
-                    conn.commit()  # Quan trọng: Phải commit thay đổi vào DB
-
-                    # Trả về kết quả cho bệnh nhân
                     result["flow"] = "AUTO_RESOLVED"
                     result["patient_message"] = (
                         f"✅ Lịch hẹn của bạn đã được đặt thành công vào lúc {args['appointment_time']}. "
                         "Mã đặt lịch của bạn là hệ thống đã ghi nhận. Xin vui lòng đến đúng giờ và mang theo giấy tờ tùy thân nhé!"
                     )
                     return result
-                else:
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "Failed to book appointment via scheduling-service: %s",
+                        exc,
+                        exc_info=True,
+                    )
                     tool_result = (
-                        "DB unavailable, cannot book appointment at this time."
+                        "Booking failed. Tell the patient booking is temporarily "
+                        "unavailable and to try again shortly."
                     )
 
             elif function_name == "resolve_and_get_booking_info":
@@ -1010,32 +1021,31 @@ async def run_triage_pipeline(
                 result["flow"] = "AUTO_RESOLVED"
                 result["department_code"] = args["department_code"]
                 result["department_name"] = args["department_name"]
-                if conn:
-                    result["doctors"] = await get_doctors_by_department(
-                        conn, args["department_code"]
-                    )
-                    all_clinics = await get_clinics_by_department(
-                        conn, args["department_code"]
-                    )
-                    # Sort clinics: matching nearest facility name to top
-                    if nearest_facility:
-                        loc_lower = nearest_facility.lower()
-                        # Xử lý các keyword từ LLM để map với DB
-                        if "times" in loc_lower:
-                            loc_lower = "times"
-                        elif "royal" in loc_lower:
-                            loc_lower = "royal"
-                        elif "ocean" in loc_lower:
-                            loc_lower = "ocean"
+                result["doctors"] = await get_doctors_by_department(
+                    org_id, args["department_code"]
+                )
+                all_clinics = await get_clinics_by_department(
+                    org_id, args["department_code"]
+                )
+                # Sort clinics: matching nearest facility name to top
+                if nearest_facility:
+                    loc_lower = nearest_facility.lower()
+                    # Xử lý các keyword từ LLM để map với DB
+                    if "times" in loc_lower:
+                        loc_lower = "times"
+                    elif "royal" in loc_lower:
+                        loc_lower = "royal"
+                    elif "ocean" in loc_lower:
+                        loc_lower = "ocean"
 
-                        def _clinic_sort_key(c: dict) -> int:
-                            name_lower = c.get("name", "").lower()
-                            if loc_lower in name_lower:
-                                return 0  # match → top
-                            return 1
+                    def _clinic_sort_key(c: dict) -> int:
+                        name_lower = c.get("name", "").lower()
+                        if loc_lower in name_lower:
+                            return 0  # match → top
+                        return 1
 
-                        all_clinics.sort(key=_clinic_sort_key)
-                    result["clinics"] = all_clinics
+                    all_clinics.sort(key=_clinic_sort_key)
+                result["clinics"] = all_clinics
                 tool_result = "Booking info retrieved."
 
                 nearest_clinic_name = ""
