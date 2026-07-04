@@ -1,4 +1,10 @@
-# How to Run the Project (Windows & Linux)
+# TriageOS
+
+TriageOS is an independent portfolio project for AI-assisted specialty routing with a human-in-the-loop review queue. It is not affiliated with, endorsed by, or connected to any real hospital or clinic network.
+
+All seed data, demo doctors, demo clinics, and patient examples are synthetic. Do not use real PHI or real patient data in local development, tests, demos, logs, prompts, or hosted environments.
+
+## How to Run the Project (Windows & Linux)
 
 This guide provides instructions to set up and run the AI Server (Backend) and the Next.js application (Frontend) on both Windows and Linux environments.
 
@@ -21,7 +27,7 @@ Before running the application, you must configure your environment variables:
     LANGFUSE_SECRET_KEY=sk-lf-...
     LANGFUSE_PUBLIC_KEY=pk-lf-...
     LANGFUSE_HOST="[https://cloud.langfuse.com](https://cloud.langfuse.com)"
-    DATABASE_URL=postgresql://postgres.[your-project]:[password]@aws-0-[region][.pooler.supabase.com:6543/postgres](https://.pooler.supabase.com:6543/postgres)
+    DATABASE_URL=postgresql://user:password@localhost:5432/triageos
     ```
 
 ## 2. Running the Backend (AI Server)
