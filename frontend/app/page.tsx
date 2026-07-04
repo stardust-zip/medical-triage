@@ -122,7 +122,7 @@ function EmergencyAlert({
 function PendingHumanBubble() {
   const [elapsed, setElapsed] = useState(0);
   const [timedOut, setTimedOut] = useState(false);
-  const startRef = useRef(Date.now());
+  const startRef = useRef(0);
 
   // ponytail: no live "nurse resolved" push notice here — GET
   // /api/v1/queue/pending now requires a staff bearer token (Phase 1
@@ -133,6 +133,7 @@ function PendingHumanBubble() {
 
   // Timer
   useEffect(() => {
+    startRef.current = Date.now();
     const tick = setInterval(() => {
       const secs = Math.floor((Date.now() - startRef.current) / 1000);
       setElapsed(secs);
@@ -194,38 +195,6 @@ function PendingHumanBubble() {
           }}
         />
       </div>
-    </div>
-  );
-}
-
-function AutoResolvedBubble({
-  departmentName,
-  confidence,
-}: {
-  departmentName: string;
-  confidence: number;
-}) {
-  return (
-    <div className="mx-3 my-1 rounded-xl bg-green-50 border border-green-200 p-3 shadow-sm">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-lg">✅</span>
-        <p className="font-bold text-green-800 text-sm">{departmentName}</p>
-      </div>
-      <div className="flex items-center gap-1 mb-2">
-        <div className="flex-1 h-2 rounded-full bg-green-100 overflow-hidden">
-          <div
-            className="h-full rounded-full bg-green-500"
-            style={{ width: `${confidence}%` }}
-          />
-        </div>
-        <span className="text-xs font-semibold text-green-700 w-10 text-right">
-          {confidence}%
-        </span>
-      </div>
-      <p className="text-xs text-green-700">
-        Vui lòng đến quầy{" "}
-        <span className="font-semibold">{departmentName}</span> để được khám.
-      </p>
     </div>
   );
 }
@@ -410,14 +379,6 @@ function DoctorSelectionBubble({
 function ChatBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
 
-  // Tạo state để kiểm tra xem component đã hiển thị trên trình duyệt chưa
-  const [mounted, setMounted] = useState(false);
-
-  // useEffect này chỉ chạy một lần duy nhất sau khi component mount thành công
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
   if (message.isEmergency) {
     return (
       <div className="w-full">
@@ -456,12 +417,11 @@ function ChatBubble({ message }: { message: Message }) {
           {message.content}
         </div>
 
-        {/* Chỉ hiển thị thời gian khi đã mounted để tránh lệch giây giữa Server và Client */}
         <span
           className="text-[10px] text-gray-400 mt-0.5 px-1"
           suppressHydrationWarning
         >
-          {mounted ? formatTime(message.timestamp) : ""}
+          {formatTime(message.timestamp)}
         </span>
       </div>
       {isUser && (

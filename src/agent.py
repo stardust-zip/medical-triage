@@ -1048,7 +1048,7 @@ async def run_triage_pipeline(
             elif function_name == "book_appointment":
                 if conn:
                     # Gọi hàm helper sẵn có trong agent.py để ghi vào CSDL
-                    appt_id = await create_appointment(
+                    await create_appointment(
                         conn=conn,
                         patient_id=patient_id,
                         doctor_id=args["doctor_id"],

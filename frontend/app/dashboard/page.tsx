@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useCallback, type FormEvent } from "react";
 import {
   getPendingQueue,
@@ -655,12 +656,12 @@ export default function NurseDashboard() {
             </button>
 
             {/* Back to patient chat */}
-            <a
+            <Link
               href="/"
               className="text-blue-200 hover:text-white text-xs underline hidden md:inline"
             >
               ← Giao diện bệnh nhân
-            </a>
+            </Link>
           </div>
         </div>
       </header>
