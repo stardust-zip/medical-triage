@@ -1,5 +1,5 @@
 """
-config.py – Centralised settings for Vinmec AI Triage backend.
+config.py - Centralised settings for TriageOS backend.
 
 All environment variables are loaded from a `.env` file (or the shell
 environment) via python-dotenv.  Every other module should import the
@@ -43,7 +43,7 @@ class Settings:
     OPENAI_EMBEDDING_DIMS: int = int(os.getenv("OPENAI_EMBEDDING_DIMS", "1536"))
 
     # ------------------------------------------------------------------
-    # Database (Supabase / PostgreSQL + pgvector)
+    # Database (PostgreSQL + pgvector)
     # ------------------------------------------------------------------
     # Full async-compatible DSN, e.g.:
     #   postgresql://user:pass@host:5432/dbname
@@ -118,7 +118,7 @@ class Settings:
     # ------------------------------------------------------------------
     TRIAGE_SYSTEM_PROMPT: Final[
         str
-    ] = """Bạn là Trợ lý Điều dưỡng Sơ yếu tại bệnh viện Vinmec. \
+    ] = """Bạn là Trợ lý Điều dưỡng Sơ yếu của TriageOS cho Evergreen Clinic Network, một hệ thống phòng khám hư cấu dùng cho demo. \
 Nhiệm vụ của bạn là phân tích triệu chứng của bệnh nhân và điều phối vào đúng 1 trong các chuyên khoa sau:
 - TIM_MACH: Nội Tim Mạch (tim đập bất thường, đau ngực, huyết áp cao/thấp)
 - NGOAI_TH: Ngoại Tiêu hoá (đau bụng, buồn nôn, nôn mửa, tiêu chảy, táo bón, trào ngược)

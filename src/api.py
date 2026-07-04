@@ -1,5 +1,5 @@
 """
-api.py – FastAPI application for Vinmec AI Triage system.
+api.py - FastAPI application for TriageOS.
 
 Endpoints
 ---------
@@ -71,7 +71,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
-logger = logging.getLogger("vinmec.api")
+logger = logging.getLogger("triageos.api")
 
 # ---------------------------------------------------------------------------
 # Rate limiter
@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     On startup: log configuration summary.
     On shutdown: flush Langfuse traces.
     """
-    logger.info("=== Vinmec AI Triage API starting ===")
+    logger.info("=== TriageOS API starting ===")
     logger.info("Chat model  : %s", settings.OPENAI_CHAT_MODEL)
     logger.info("Embed model : %s", settings.OPENAI_EMBEDDING_MODEL)
     logger.info("CORS origins: %s", settings.CORS_ORIGINS)
@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
         logger.info("Langfuse traces flushed.")
     except Exception:  # noqa: BLE001
         pass
-    logger.info("=== Vinmec AI Triage API stopped ===")
+    logger.info("=== TriageOS API stopped ===")
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +118,13 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Vinmec AI Triage API",
+    title="TriageOS API",
     description=(
-        "AI-powered patient triage system for Vinmec hospital. "
+        "AI-powered patient triage system for a fictional clinic network demo. "
         "De-identifies PII, detects red-flag emergencies via semantic similarity, "
         "routes symptoms to the appropriate department, and queues low-confidence "
-        "cases for nurse review."
+        "cases for nurse review. Independent portfolio project; not affiliated "
+        "with any real hospital."
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -203,7 +204,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):  # noqa
 def read_root():
     """API root – basic info."""
     return {
-        "service": "Vinmec AI Triage API",
+        "service": "TriageOS API",
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/health",
@@ -332,7 +333,7 @@ async def chat_triage(
         langfuse.update_current_trace(
             session_id=body.session_id or str(uuid.uuid4()),
             user_id=body.patient_id,
-            tags=["vinmec-triage", "v1"],
+            tags=["triageos", "v1"],
             metadata={
                 "message_length": len(body.message),
                 "has_history": bool(body.conversation_history),

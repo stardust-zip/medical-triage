@@ -37,7 +37,7 @@ interface Message {
 // ---------------------------------------------------------------------------
 
 const DISCLAIMER =
-  "⚕️ Đây là trợ lý gợi ý chuyên khoa, không thay thế chẩn đoán y khoa. Trong trường hợp khẩn cấp, hãy gọi 115 ngay.";
+  "⚕️ TriageOS là demo portfolio độc lập, không liên kết với bệnh viện thật và không thay thế chẩn đoán y khoa. Không nhập thông tin sức khỏe thật. Trong trường hợp khẩn cấp, hãy gọi 115 ngay.";
 
 const SLA_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
 
@@ -45,7 +45,7 @@ const WELCOME_MESSAGE: Message = {
   id: "welcome",
   role: "assistant",
   content:
-    "Xin chào! Tôi là Trợ lý Điều dưỡng Sơ yếu của Vinmec. Bạn đang gặp triệu chứng gì? Hãy mô tả chi tiết để tôi có thể hỗ trợ bạn chọn đúng chuyên khoa.",
+    "Xin chào! Tôi là Trợ lý Điều dưỡng Sơ yếu của TriageOS cho mạng lưới phòng khám demo Evergreen. Bạn đang gặp triệu chứng gì? Hãy dùng thông tin giả lập để tôi hỗ trợ chọn chuyên khoa phù hợp.",
   timestamp: new Date(),
 };
 
@@ -59,10 +59,10 @@ function generateId(): string {
 
 function getOrCreatePatientId(): string {
   if (typeof window === "undefined") return generateId();
-  const stored = localStorage.getItem("vinmec_patient_id");
+  const stored = localStorage.getItem("triageos_patient_id");
   if (stored) return stored;
   const id = "PAT-" + generateId().toUpperCase();
-  localStorage.setItem("vinmec_patient_id", id);
+  localStorage.setItem("triageos_patient_id", id);
   return id;
 }
 
@@ -708,11 +708,11 @@ export default function PatientChatPage() {
         {/* Header */}
         <div className="bg-blue-700 px-4 py-3 flex items-center gap-3 shrink-0">
           <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center shrink-0">
-            <span className="text-blue-700 font-bold text-sm">V+</span>
+            <span className="text-blue-700 font-bold text-sm">T</span>
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-white font-bold text-sm leading-tight">
-              Vinmec AI Triage
+              TriageOS
             </h1>
             <p className="text-blue-200 text-xs truncate">
               Trợ lý Điều dưỡng Sơ yếu

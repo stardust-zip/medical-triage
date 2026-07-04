@@ -502,11 +502,11 @@ export default function NurseDashboard() {
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center shrink-0">
-              <span className="text-blue-700 font-bold text-sm">V+</span>
+              <span className="text-blue-700 font-bold text-sm">T</span>
             </div>
             <div>
               <h1 className="text-white font-bold text-lg leading-tight">
-                🏥 Vinmec Triage Dashboard
+                🏥 TriageOS Dashboard
               </h1>
               <p className="text-blue-200 text-xs">Hàng đợi phân khoa · Điều dưỡng</p>
             </div>

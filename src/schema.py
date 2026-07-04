@@ -1,5 +1,5 @@
 """
-schema.py – Pydantic models for the Vinmec AI Triage API.
+schema.py - Pydantic models for the TriageOS API.
 
 Every request body, response body, and internal data-transfer object used
 across the FastAPI application is defined here so that validation, serialisation

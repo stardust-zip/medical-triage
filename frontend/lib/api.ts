@@ -1,4 +1,4 @@
-// lib/api.ts – Typed API client for the Vinmec AI Triage FastAPI backend
+// lib/api.ts - Typed API client for the TriageOS FastAPI backend
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 

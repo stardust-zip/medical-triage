@@ -1,5 +1,5 @@
 """
-agent.py – Core AI pipeline for Vinmec AI Triage system.
+agent.py - Core AI pipeline for TriageOS.
 
 Pipeline stages (in order):
 1. De-identification  : Presidio strips PII/PHI before any LLM call
@@ -26,13 +26,13 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from .config import settings
 
-logger = logging.getLogger("vinmec.agent")
+logger = logging.getLogger("triageos.agent")
 
 # ---------------------------------------------------------------------------
 # AGENT CONFIGURATION (Prompt & Tools)
 # ---------------------------------------------------------------------------
 
-_AGENT_SYSTEM_PROMPT = """Bạn là trợ lý AI Điều dưỡng Sơ yếu của Vinmec. Nhiệm vụ của bạn là thu thập triệu chứng và phân luồng bệnh nhân.
+_AGENT_SYSTEM_PROMPT = """Bạn là trợ lý AI Điều dưỡng Sơ yếu của TriageOS cho Evergreen Clinic Network, một hệ thống phòng khám hư cấu dùng cho demo. Nhiệm vụ của bạn là thu thập triệu chứng và phân luồng bệnh nhân.
 
 QUY TẮC PHẢN HỒI (CAO NHẤT)
 1. CHÀO HỎI: Nếu bệnh nhân chỉ chào hỏi (ví dụ: "hello", "chào bạn"), hãy chào lại lịch sự và nhắc họ tiếp tục cung cấp triệu chứng hoặc vị trí.
@@ -48,10 +48,10 @@ BƯỚC 3 - LẤY VỊ TRÍ & PHÂN LUỒNG:
    - Khi đã thu thập đủ triệu chứng và Tự tin >= 85%: Bắt buộc phải biết bệnh nhân ĐANG Ở ĐÂU để gọi tool `resolve_and_get_booking_info`. Nếu chưa biết, hãy hỏi vị trí.
    - Khi triệu chứng vẫn mơ hồ, Tự tin < 85%: BẮT BUỘC gọi tool `escalate_to_human_nurse` (không cần hỏi vị trí).
 
-Các cơ sở Vinmec hiện có
-- Times City (458 Minh Khai, Hai Bà Trưng, Hà Nội)
-- Royal City (72A Nguyễn Trãi, Thanh Xuân, Hà Nội)
-- Ocean Park (2 Hải Bối, Đông Anh, Hà Nội)
+Các cơ sở demo của Evergreen Clinic Network
+- Midtown Clinic (100 Demo Care Way, Ba Dinh, Ha Noi)
+- Riverside Clinic (200 Sample Health Street, Cau Giay, Ha Noi)
+- Lakeside Clinic (300 Fictional Wellness Avenue, Long Bien, Ha Noi)
 
 Danh sách CÁC CHUYÊN KHOA hợp lệ (BẮT BUỘC sử dụng mã chính xác trong department_code):
 - TIM_MACH: Nội Tim Mạch (tim đập bất thường, đau ngực, huyết áp cao/thấp)
@@ -123,7 +123,7 @@ _AGENT_TOOLS: list[Any] = [
                     },
                     "nearest_facility": {
                         "type": "string",
-                        "description": "Suy luận địa lý để chọn ra 1 cơ sở gần vị trí bệnh nhân nhất (chọn đúng 1 trong: 'Times City', 'Royal City', 'Ocean Park'). NẾU CHƯA BIẾT VỊ TRÍ BỆNH NHÂN, để chuỗi rỗng '' và tool sẽ bị từ chối.",
+                        "description": "Suy luận địa lý để chọn ra 1 cơ sở gần vị trí bệnh nhân nhất (chọn đúng 1 trong: 'Midtown Clinic', 'Riverside Clinic', 'Lakeside Clinic'). NẾU CHƯA BIẾT VỊ TRÍ BỆNH NHÂN, để chuỗi rỗng '' và tool sẽ bị từ chối.",
                     },
                 },
                 "required": ["department_code", "department_name", "nearest_facility"],

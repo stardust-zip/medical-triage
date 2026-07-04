@@ -1,5 +1,5 @@
 # ============================================================
-# Vinmec AI Triage – Python dependencies
+# TriageOS - Python dependencies
 # ============================================================
 
 # --- Web framework & server ---

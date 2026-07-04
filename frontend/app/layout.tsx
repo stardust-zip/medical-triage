@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vinmec AI Triage – Trợ lý Điều dưỡng Sơ yếu",
+  title: "TriageOS - Trợ lý Điều dưỡng Sơ yếu",
   description:
-    "Hệ thống phân loại triệu chứng thông minh, gợi ý chuyên khoa phù hợp cho bệnh nhân Vinmec.",
+    "Demo portfolio độc lập cho phân loại triệu chứng và gợi ý chuyên khoa với dữ liệu hư cấu.",
 };
 
 export default function RootLayout({
