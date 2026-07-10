@@ -1,11 +1,13 @@
 # Deployment
 
-This app ships as four runtime containers plus Postgres:
+This app ships as six runtime containers plus Postgres:
 
 - `frontend`: Next.js standalone server
 - `gateway`: public Go API gateway
 - `api`: private Python/FastAPI triage service
-- `identity`: private Go identity service
+- `identity`: private Go identity service (owns login: email + password_hash)
+- `queue`: private Go queue-service
+- `scheduling`: private Go scheduling-service
 - `db`: Postgres with pgvector for local/VPS deployments
 
 For AWS, GCP, and most PaaS providers, prefer a managed Postgres instance with pgvector enabled and run only the app containers.
@@ -14,7 +16,7 @@ For AWS, GCP, and most PaaS providers, prefer a managed Postgres instance with p
 
 - Set strong unique values for `GATEWAY_SHARED_SECRET`,
   `INTERNAL_SHARED_SECRET`, `PATIENT_SESSION_SECRET`, and
-  `SUPABASE_JWT_SECRET`.
+  `STAFF_SESSION_SECRET`.
 - Use a privileged `ADMIN_DATABASE_URL` only for the Alembic migration job.
 - Use a separate non-superuser `DATABASE_URL` for app services.
 - Keep `api` and `identity` private; expose only `gateway` and `frontend`.
@@ -40,7 +42,7 @@ Put Caddy, Nginx, Traefik, or the cloud provider load balancer in front of:
 - `frontend:3000`
 - `gateway:8080`
 
-Keep `api`, `identity`, and `db` on the private Docker network.
+Keep `api`, `identity`, `queue`, `scheduling`, and `db` on the private Docker network.
 
 ## AWS
 
@@ -89,11 +91,13 @@ For Render, Fly.io, Railway, or similar platforms:
 
 1. Build images.
 2. Run Alembic migrations using `ADMIN_DATABASE_URL`.
-3. Deploy private services: `api`, `identity`.
+3. Deploy private services: `api`, `identity`, `queue`, `scheduling`.
 4. Deploy public services: `gateway`, `frontend`.
 5. Check `/health` through the gateway.
-6. Seed red-flag embeddings through `POST /api/v1/admin/seed-red-flags` with
-   an ADMIN/OWNER staff token.
+6. Run `python scripts/seed_demo_staff.py` to create the first OWNER login
+   (prints the email/password to use at `/dashboard`).
+7. Seed red-flag embeddings through `POST /api/v1/admin/seed-red-flags` with
+   that OWNER token.
 
 ## Migration Tooling
 

@@ -32,7 +32,15 @@ Open:
 - API gateway: http://localhost:8000
 - API health: http://localhost:8000/health
 
-The compose stack starts Postgres + pgvector, runs the separate Alembic migration container, then starts the Python API, Go identity service, Go gateway, and Next.js frontend.
+The compose stack starts Postgres + pgvector, runs the Alembic migration container, then the Python API, Go identity/queue/scheduling services, Go gateway, and Next.js frontend.
+
+The nurse dashboard (http://localhost:3000/dashboard) needs a staff login, which doesn't exist yet on a fresh database. Create one:
+
+```bash
+make seed-staff
+```
+
+This prints an email/password — use it to sign in.
 
 ## Daily Development
 
@@ -64,7 +72,7 @@ Important variables:
 - `DATABASE_URL`: non-superuser application connection string.
 - `ADMIN_DATABASE_URL`: privileged migration connection string.
 - `GATEWAY_SHARED_SECRET`, `INTERNAL_SHARED_SECRET`,
-  `PATIENT_SESSION_SECRET`, `SUPABASE_JWT_SECRET`: replace all demo values
+  `PATIENT_SESSION_SECRET`, `STAFF_SESSION_SECRET`: replace all demo values
   outside local development.
 - `CORS_ORIGINS`, `NEXT_PUBLIC_API_URL`: set these to deployed frontend/API
   URLs in production.
