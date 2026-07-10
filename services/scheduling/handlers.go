@@ -13,7 +13,7 @@ import (
 // GET /internal/scheduling/doctors, GET /internal/scheduling/clinics
 //
 // Called server-to-server by the monolith's triage pipeline
-// (src/agent.py::get_doctors_by_department / get_clinics_by_department) when
+// (services/triage/triage/agent.py::get_doctors_by_department / get_clinics_by_department) when
 // the resolve_and_get_booking_info tool needs booking options for a
 // department — never routed through api-gateway, protected by
 // X-Internal-Secret instead.

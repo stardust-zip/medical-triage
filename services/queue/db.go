@@ -2,7 +2,7 @@ package main
 
 // Data-access layer for queue-service, which owns human_triage_queue (Phase
 // 3 of docs/architecture/implementation-plan.md). Every query sets the
-// app.org_id Postgres session variable first, same as src/agent.py's
+// app.org_id Postgres session variable first, same as services/triage/triage/agent.py's
 // _set_org_context in the monolith, so row-level security (db/init.sql)
 // enforces tenant isolation — never an app-layer WHERE org_id = ... filter.
 
@@ -101,25 +101,23 @@ func getPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]q
 	return items, tx.Commit(ctx)
 }
 
-// resolveQueueItem marks queueID RESOLVED and back-fills triage_logs with the
-// nurse's final decision. Items created via createQueueItem always carry a
-// triage_log_id, so this updates that exact row; queue items that predate
-// the triage_log_id column fall back to the monolith's original heuristic
-// (most recent triage_logs row matching the AI-suggested department) so
-// in-flight items aren't silently orphaned by this migration.
+// resolveQueueItem marks queueID RESOLVED. Back-filling triage_logs (a table
+// this service doesn't own) happens out-of-band via notifyTriageResolved —
+// see handleResolveQueue. Returns the item's triage_log_id (nil for items
+// that predate that column) so the caller can pass it along.
 func resolveQueueItem(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	orgID, queueID, approvedDept, resolutionType string,
-) (bool, error) {
+) (bool, *string, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer tx.Rollback(ctx)
 
 	if err := setOrgContext(ctx, tx, orgID); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	var triageLogID *string
@@ -131,40 +129,13 @@ func resolveQueueItem(
 		queueID,
 	).Scan(&triageLogID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return false, nil, nil
 	}
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
-	if triageLogID != nil {
-		_, err = tx.Exec(ctx,
-			`UPDATE triage_logs
-			 SET    final_dept = $1, resolution_type = $2::triage_resolution
-			 WHERE  id = $3`,
-			approvedDept, resolutionType, *triageLogID,
-		)
-	} else {
-		_, err = tx.Exec(ctx,
-			`UPDATE triage_logs
-			 SET    final_dept = $1, resolution_type = $2::triage_resolution
-			 WHERE  id = (
-			     SELECT tl.id
-			     FROM   triage_logs tl
-			     WHERE  tl.ai_suggested_dept = (
-			         SELECT suggested_dept FROM human_triage_queue WHERE id = $3
-			     )
-			     ORDER  BY tl.created_at DESC
-			     LIMIT  1
-			 )`,
-			approvedDept, resolutionType, queueID,
-		)
-	}
-	if err != nil {
-		return false, err
-	}
-
-	return true, tx.Commit(ctx)
+	return true, triageLogID, tx.Commit(ctx)
 }
 
 func markTimedOutItems(ctx context.Context, pool *pgxpool.Pool, orgID string, slaMinutes int) (int, error) {

@@ -72,13 +72,13 @@ func main() {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.backendURL)
 	proxy.Director = withGatewaySecret(cfg, proxy.Director)
 
-	// queue-service owns human_triage_queue as of Phase 3 — the monolith no
-	// longer serves these routes at all (see src/api.py).
+	// queue-service owns human_triage_queue as of Phase 3 — triage-service no
+	// longer serves these routes at all (see services/triage/triage/api.py).
 	queueProxy := httputil.NewSingleHostReverseProxy(cfg.queueServiceURL)
 	queueProxy.Director = withGatewaySecret(cfg, queueProxy.Director)
 
 	// scheduling-service owns departments/doctors/clinics/appointments as of
-	// Phase 4 — same deal, the monolith no longer serves this route either.
+	// Phase 4 — same deal, triage-service no longer serves this route either.
 	schedulingProxy := httputil.NewSingleHostReverseProxy(cfg.schedulingServiceURL)
 	schedulingProxy.Director = withGatewaySecret(cfg, schedulingProxy.Director)
 
@@ -142,7 +142,7 @@ func stripClientIdentityHeaders(next http.Handler) http.Handler {
 
 // withGatewaySecret wraps a reverse-proxy Director to attach the shared
 // secret every downstream service checks (see requireGatewaySecret in
-// src/context.py and requireInternalSecret's staff-route counterpart in
+// services/triage/triage/context.py and requireInternalSecret's staff-route counterpart in
 // services/queue/auth.go) — proving a request actually came through this
 // gateway rather than hitting a service directly.
 func withGatewaySecret(cfg config, base func(*http.Request)) func(*http.Request) {

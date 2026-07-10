@@ -57,6 +57,7 @@ func main() {
 
 	internalSecret := mustGetenv("INTERNAL_SHARED_SECRET")
 	gatewaySecret := mustGetenv("GATEWAY_SHARED_SECRET")
+	triageServiceURL := getenv("TRIAGE_SERVICE_URL", "http://localhost:8000")
 	slaMinutes := getenvInt("QUEUE_SLA_MINUTES", 3)
 	sweepInterval := time.Duration(getenvInt("QUEUE_SLA_SWEEP_INTERVAL_SECONDS", 30)) * time.Second
 
@@ -66,7 +67,7 @@ func main() {
 	mux.HandleFunc("GET /health", handleHealth(pool))
 	mux.Handle("POST /internal/queue/items", requireInternalSecret(internalSecret, handleCreateItem(pool)))
 	mux.HandleFunc("GET /api/v1/queue/pending", staff(handlePendingQueue(pool, slaMinutes)))
-	mux.HandleFunc("POST /api/v1/queue/resolve", staff(handleResolveQueue(pool)))
+	mux.HandleFunc("POST /api/v1/queue/resolve", staff(handleResolveQueue(pool, triageServiceURL, internalSecret)))
 	mux.HandleFunc("POST /api/v1/queue/check-timeouts", staff(handleCheckTimeouts(pool, slaMinutes)))
 	mux.HandleFunc("GET /ws/queue", staff(handleQueueWS(globalHub)))
 

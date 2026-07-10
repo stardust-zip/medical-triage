@@ -11,7 +11,7 @@ import (
 
 // ---------------------------------------------------------------------------
 // POST /internal/queue/items — called server-to-server by the monolith's
-// triage pipeline (src/agent.py) when it escalates a case, never by the
+// triage pipeline (services/triage/triage/agent.py) when it escalates a case, never by the
 // gateway/browser. Protected by X-Internal-Secret, same convention as
 // identity-service's /internal/* routes.
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ var resolutionTypes = map[string]bool{
 	"AI_AUTO": true, "NURSE_APPROVED": true, "NURSE_CORRECTED": true, "DOCTOR_CORRECTED": true,
 }
 
-func handleResolveQueue(pool *pgxpool.Pool) func(http.ResponseWriter, *http.Request, staffContext) {
+func handleResolveQueue(pool *pgxpool.Pool, triageServiceURL, internalSecret string) func(http.ResponseWriter, *http.Request, staffContext) {
 	return func(w http.ResponseWriter, r *http.Request, ctx staffContext) {
 		var body resolveRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
@@ -120,7 +120,7 @@ func handleResolveQueue(pool *pgxpool.Pool) func(http.ResponseWriter, *http.Requ
 			return
 		}
 
-		updated, err := resolveQueueItem(r.Context(), pool, ctx.OrgID, body.QueueID, body.ApprovedDept, body.ResolutionType)
+		updated, triageLogID, err := resolveQueueItem(r.Context(), pool, ctx.OrgID, body.QueueID, body.ApprovedDept, body.ResolutionType)
 		if err != nil {
 			log.Printf("resolve queue item failed: %v", err)
 			writeJSONError(w, http.StatusServiceUnavailable, "DB_ERROR", "could not resolve queue item")
@@ -132,6 +132,12 @@ func handleResolveQueue(pool *pgxpool.Pool) func(http.ResponseWriter, *http.Requ
 		}
 
 		globalHub.broadcast(ctx.OrgID, queueChangedMessage)
+
+		// Best-effort, off the request path: the nurse's resolve action
+		// must never fail because triage-service is slow or down.
+		if triageLogID != nil {
+			go notifyTriageResolved(triageServiceURL, internalSecret, ctx.OrgID, *triageLogID, body.ApprovedDept, body.ResolutionType)
+		}
 
 		action := "Đã duyệt"
 		if body.ResolutionType == "NURSE_CORRECTED" {

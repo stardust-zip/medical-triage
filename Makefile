@@ -19,7 +19,7 @@ migrate:
 	docker compose run --rm migrate
 
 seed-staff:
-	docker compose run --rm -e IDENTITY_URL=http://identity:8082 api python scripts/seed_demo_staff.py
+	docker compose run --rm -e IDENTITY_URL=http://identity:8082 migrate python scripts/seed_demo_staff.py
 
 goose-version:
 	docker build -t triageos-goose ./tools/goose
@@ -28,7 +28,7 @@ goose-version:
 test: test-python test-go test-frontend
 
 test-python:
-	pytest
+	cd services/triage && pytest
 
 test-go:
 	cd services/gateway && go test ./...

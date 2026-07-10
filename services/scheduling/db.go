@@ -4,7 +4,7 @@ package main
 // clinics, and appointments (Phase 4 of
 // docs/architecture/implementation-plan.md). Every query sets the
 // app.org_id Postgres session variable first, same pattern as
-// services/queue/db.go and src/agent.py's _set_org_context, so row-level
+// services/queue/db.go and services/triage/triage/agent.py's _set_org_context, so row-level
 // security (db/init.sql) enforces tenant isolation.
 
 import (

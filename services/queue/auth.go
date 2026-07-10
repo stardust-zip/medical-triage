@@ -1,6 +1,6 @@
 package main
 
-// Trust-boundary checks for queue-service, mirroring src/context.py in the
+// Trust-boundary checks for queue-service, mirroring services/triage/triage/context.py in the
 // monolith: api-gateway verifies identity and forwards it as headers,
 // stripping whatever the client sent (services/gateway/main.go's
 // trustedDirector) — this is the one place those headers become a typed
