@@ -84,7 +84,7 @@ privileges.
 
 ## Database Migrations
 
-Canonical schema migrations are Alembic revisions in `migrations/versions`. SQLAlchemy metadata lives in `src/db_models.py` for future Alembic autogeneration and schema review.
+Canonical schema migrations are Alembic revisions in `migrations/versions`. SQLAlchemy metadata lives in `db_models.py` for future Alembic autogeneration and schema review.
 
 Run migrations through Docker:
 

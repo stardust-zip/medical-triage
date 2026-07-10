@@ -102,7 +102,7 @@ For Render, Fly.io, Railway, or similar platforms:
 ## Migration Tooling
 
 Alembic is the source of truth for the current shared database schema.
-SQLAlchemy models live in `src/db_models.py`, and revision files live in
+SQLAlchemy models live in `db_models.py`, and revision files live in
 `migrations/versions`.
 
 The repo also includes a `goose` Dockerfile under `tools/goose` for future
