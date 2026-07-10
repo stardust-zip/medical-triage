@@ -7,7 +7,8 @@ on:
     branches: ["main"]
 
 jobs:
-  python:
+  # Root-level migration tooling (alembic + db_models.py). No tests here.
+  migrations:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -42,10 +43,52 @@ jobs:
       - name: Apply database migrations
         run: python scripts/migrate.py
 
-      - name: Lint Python
-        run: ruff check src tests scripts migrations
+      - name: Lint migration tooling
+        run: ruff check db_models.py scripts migrations
 
-      - name: Test Python
+  triage:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: triageos
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d triageos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install root migration tooling
+        run: pip install .
+
+      - name: Generate CI environment
+        run: scripts/write_ci_env.sh
+
+      - name: Apply database migrations
+        run: python scripts/migrate.py
+
+      - name: Install triage-service
+        working-directory: services/triage
+        run: pip install ".[dev]"
+
+      - name: Lint triage-service
+        working-directory: services/triage
+        run: ruff check triage tests
+
+      - name: Test triage-service
+        working-directory: services/triage
         run: pytest
 
   # Live-LLM eval suite; needs the EVAL_OPENAI_API_KEY secret or it skips.
@@ -73,10 +116,8 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ".[dev]"
+      - name: Install root migration tooling
+        run: pip install .
 
       - name: Generate CI environment
         run: scripts/write_ci_env.sh
@@ -84,12 +125,17 @@ jobs:
       - name: Apply database migrations
         run: python scripts/migrate.py
 
+      - name: Install triage-service
+        working-directory: services/triage
+        run: pip install ".[dev]"
+
       - name: Use real OpenAI key for the eval suite (if configured)
         env:
           EVAL_OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
         run: echo "OPENAI_API_KEY=${EVAL_OPENAI_API_KEY}" >> "$GITHUB_ENV"
 
       - name: Red-flag recall/precision + injection regression eval
+        working-directory: services/triage
         run: pytest tests/test_red_flag_eval.py tests/test_injection_regression.py -v
 
   go:

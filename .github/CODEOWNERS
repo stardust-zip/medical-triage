@@ -1,4 +1,4 @@
 # Safety-critical: threshold/enforcement/RLS changes require review.
-src/config.py           @stardust-zip
-src/agent.py            @stardust-zip
-db/init.sql             @stardust-zip
+services/triage/triage/config.py   @stardust-zip
+services/triage/triage/agent.py    @stardust-zip
+db/init.sql                        @stardust-zip
