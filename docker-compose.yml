@@ -108,7 +108,7 @@ services:
       SCHEDULING_SERVICE_URL: "http://scheduling:8084"
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?GATEWAY_SHARED_SECRET is required. Run ./setup.sh or create .env.}
       INTERNAL_SHARED_SECRET: ${INTERNAL_SHARED_SECRET:?INTERNAL_SHARED_SECRET is required. Run ./setup.sh or create .env.}
-      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required. Run ./setup.sh or create .env.}
+      STAFF_SESSION_SECRET: ${STAFF_SESSION_SECRET:?STAFF_SESSION_SECRET is required. Run ./setup.sh or create .env.}
       PATIENT_SESSION_SECRET: ${PATIENT_SESSION_SECRET:?PATIENT_SESSION_SECRET is required. Run ./setup.sh or create .env.}
     depends_on:
       api:
@@ -126,8 +126,6 @@ services:
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8000
         NEXT_PUBLIC_ORG_SLUG: evergreen-demo
-        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
-        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
     ports:
       - "3000:3000"
     depends_on:

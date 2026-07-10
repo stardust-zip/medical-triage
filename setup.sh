@@ -50,7 +50,7 @@ get_env_var() {
 
 is_placeholder_value() {
   case "$1" in
-    "" | "postgres" | "triageos_app_password" | "change-me-"* | "your-supabase-jwt-secret")
+    "" | "postgres" | "triageos_app_password" | "change-me-"*)
       return 0
       ;;
     *)
@@ -99,14 +99,14 @@ if [ "${created_env}" -eq 1 ]; then
   ensure_secret_var "POSTGRES_PASSWORD"
   ensure_secret_var "GATEWAY_SHARED_SECRET"
   ensure_secret_var "INTERNAL_SHARED_SECRET"
-  ensure_secret_var "SUPABASE_JWT_SECRET"
+  ensure_secret_var "STAFF_SESSION_SECRET"
   ensure_secret_var "PATIENT_SESSION_SECRET"
 else
   ensure_env_var "APP_DB_PASSWORD" "triageos_app_password"
   ensure_env_var "POSTGRES_PASSWORD" "postgres"
   ensure_env_var "GATEWAY_SHARED_SECRET" "$(random_hex)"
   ensure_env_var "INTERNAL_SHARED_SECRET" "$(random_hex)"
-  ensure_env_var "SUPABASE_JWT_SECRET" "$(random_hex)"
+  ensure_env_var "STAFF_SESSION_SECRET" "$(random_hex)"
   ensure_env_var "PATIENT_SESSION_SECRET" "$(random_hex)"
 fi
 
