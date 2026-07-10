@@ -64,16 +64,15 @@ CREATE TABLE IF NOT EXISTS organizations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- users.auth_user_id is the Supabase Auth user id (auth.users.id) – identity-service
--- maps that opaque identity to a tenant + role. One row per staff member; patients
--- never get a row here (see "Patient sessions" below).
+-- Local auth: email + password_hash, no external IdP. One row per staff
+-- member; patients never get a row here.
 CREATE TABLE IF NOT EXISTS users (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id       UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    auth_user_id UUID        NOT NULL UNIQUE,
-    email        VARCHAR(255) NOT NULL,
-    role         user_role   NOT NULL DEFAULT 'NURSE',
-    created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id        UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    email         VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role          user_role   NOT NULL DEFAULT 'NURSE',
+    created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_org ON users (org_id);

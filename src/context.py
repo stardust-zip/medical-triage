@@ -1,8 +1,8 @@
 """
 context.py - Trust-boundary extraction for TriageOS (Phase 1: tenancy).
 
-api-gateway verifies identity — a Supabase JWT for staff, a signed anonymous
-session token for patients — and forwards the result as headers, stripping
+api-gateway verifies identity — a self-issued staff session JWT, or a signed
+anonymous session token for patients — and forwards the result as headers, stripping
 whatever the client originally sent. This module is the single place that
 reads those headers into typed context, so route handlers in api.py never
 touch raw headers or fall back to trusting request-body fields for identity
