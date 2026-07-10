@@ -1,16 +1,6 @@
-// Command gateway is TriageOS's api-gateway: the one public entry point in
-// front of the still-monolithic FastAPI backend (Phase 1 of
-// docs/architecture/implementation-plan.md).
-//
-// Responsibilities (and nothing else, yet — later phases add rate limiting,
-// WS brokering, etc.):
-//   - Verify the caller's bearer token (Supabase JWT for staff, or a
-//     self-issued anonymous session JWT for patients).
-//   - Resolve tenant + role via identity-service and forward them to the
-//     backend as headers the backend can trust — stripping any
-//     client-supplied versions of those same headers first, so a caller can
-//     never spoof org/user identity.
-//   - Mint anonymous, token-bound patient sessions (no free-text patient id).
+// Command gateway is TriageOS's api-gateway: the one public entry point.
+// Verifies self-issued session JWTs (staff and patient), forwards trusted
+// identity headers to backend services, strips any client-supplied copies.
 package main
 
 import (
@@ -28,7 +18,7 @@ type config struct {
 	queueServiceURL      *url.URL
 	schedulingServiceURL *url.URL
 	identity             *identityClient
-	supabaseJWTSecret    string
+	staffSessionSecret   string
 	patientSessionSecret string
 	gatewaySharedSecret  string
 	corsOrigins          []string
@@ -54,7 +44,7 @@ func loadConfig() config {
 		queueServiceURL:      queueService,
 		schedulingServiceURL: schedulingService,
 		identity:             newIdentityClient(getenv("IDENTITY_URL", "http://localhost:8082"), mustGetenv("INTERNAL_SHARED_SECRET")),
-		supabaseJWTSecret:    mustGetenv("SUPABASE_JWT_SECRET"),
+		staffSessionSecret:   mustGetenv("STAFF_SESSION_SECRET"),
 		patientSessionSecret: mustGetenv("PATIENT_SESSION_SECRET"),
 		gatewaySharedSecret:  mustGetenv("GATEWAY_SHARED_SECRET"),
 		corsOrigins:          strings.Split(getenv("CORS_ORIGINS", "http://localhost:3000"), ","),
@@ -97,11 +87,14 @@ func main() {
 	// Patient-facing: mint an anonymous, token-bound session. No login.
 	mux.HandleFunc("POST /api/v1/session/anonymous", handleAnonymousSession(cfg))
 
+	// Staff-facing: email+password login, mints a self-issued session JWT.
+	mux.HandleFunc("POST /api/v1/auth/staff/login", handleStaffLogin(cfg))
+
 	// Patient-facing: require a valid patient-session token.
 	mux.Handle("POST /api/v1/chat/triage", requirePatientSession(cfg, proxy))
 	mux.Handle("POST /api/v1/appointments", requirePatientSession(cfg, schedulingProxy))
 
-	// Staff-facing: require a valid Supabase JWT + resolved tenant/role.
+	// Staff-facing: require a valid staff session token.
 	mux.Handle("GET /api/v1/queue/pending", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))
 	mux.Handle("POST /api/v1/queue/resolve", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))
 	mux.Handle("POST /api/v1/queue/check-timeouts", requireStaff(cfg, queueProxy, "NURSE", "ADMIN", "OWNER"))

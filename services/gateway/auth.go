@@ -99,30 +99,94 @@ func requirePatientSession(cfg config, next http.Handler) http.Handler {
 
 // --- Staff sessions -------------------------------------------------------
 
-// resolveStaff verifies token as a Supabase-issued staff access token,
-// resolves it to a tenant + role via identity-service, and checks the role
-// is one of roleAllowed. On any failure it writes the 401/403 itself and
-// returns ok=false — shared by requireStaff and requireStaffWS below, which
-// only differ in *where* the token comes from.
+type userLookup struct {
+	UserID string
+	OrgID  string
+	Role   string
+	Email  string
+}
+
+type staffLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type staffLoginResponse struct {
+	Token     string `json:"token"`
+	Email     string `json:"email"`
+	Role      string `json:"role"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// handleStaffLogin verifies email+password against identity-service, then
+// mints a self-issued staff session JWT — same pattern as
+// handleAnonymousSession, just password-gated instead of free.
+func handleStaffLogin(cfg config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body staffLoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" || body.Password == "" {
+			writeJSONError(w, http.StatusBadRequest, "VALIDATION_ERROR", "email and password are required")
+			return
+		}
+
+		result, status, err := cfg.identity.login(body.Email, body.Password)
+		if status == http.StatusUnauthorized {
+			writeUnauthorized(w, "invalid email or password")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE", "could not verify credentials")
+			return
+		}
+
+		expiresAt := time.Now().Add(12 * time.Hour)
+		token, err := signHS256(Claims{
+			"typ":    "staff",
+			"sub":    result.UserID,
+			"org_id": result.OrgID,
+			"role":   result.Role,
+			"email":  result.Email,
+			"exp":    expiresAt.Unix(),
+		}, cfg.staffSessionSecret)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "TOKEN_ERROR", "could not mint session")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(staffLoginResponse{
+			Token:     token,
+			Email:     result.Email,
+			Role:      result.Role,
+			ExpiresAt: expiresAt.Format(time.RFC3339),
+		})
+	}
+}
+
+// resolveStaff verifies token as a gateway-issued staff session and checks
+// the role is one of roleAllowed. Org/role/email all come from the token's
+// own claims — no identity-service round trip needed per request, since the
+// gateway verified them once at login time. On any failure it writes the
+// 401/403 itself and returns ok=false.
 func resolveStaff(cfg config, w http.ResponseWriter, token string, roleAllowed map[string]bool) (userLookup, bool) {
 	if token == "" {
 		writeUnauthorized(w, "missing staff bearer token")
 		return userLookup{}, false
 	}
-	claims, err := verifyHS256(token, cfg.supabaseJWTSecret)
-	if err != nil {
+	claims, err := verifyHS256(token, cfg.staffSessionSecret)
+	if err != nil || claims.str("typ") != "staff" {
 		writeUnauthorized(w, "invalid or expired token")
 		return userLookup{}, false
 	}
-	authUserID := claims.str("sub")
-	if authUserID == "" {
-		writeUnauthorized(w, "token missing subject")
-		return userLookup{}, false
-	}
 
-	user, err := cfg.identity.userByAuthID(authUserID)
-	if err != nil {
-		writeForbidden(w, "no tenant membership for this account")
+	user := userLookup{
+		UserID: claims.str("sub"),
+		OrgID:  claims.str("org_id"),
+		Role:   claims.str("role"),
+		Email:  claims.str("email"),
+	}
+	if user.UserID == "" || user.OrgID == "" {
+		writeUnauthorized(w, "token missing required claims")
 		return userLookup{}, false
 	}
 	if !roleAllowed[user.Role] {
@@ -147,7 +211,7 @@ func rolesSet(roles []string) map[string]bool {
 	return set
 }
 
-// requireStaff verifies the Authorization bearer token is a valid Supabase
+// requireStaff verifies the Authorization bearer token is a valid staff
 // access token, resolves it to a tenant + role via identity-service, and
 // rejects the request unless the role is in allowedRoles. nurse_id and org_id
 // on downstream resolve actions therefore always come from this verified

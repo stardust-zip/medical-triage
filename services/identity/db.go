@@ -1,19 +1,18 @@
 package main
 
-// Thin data-access layer over the organizations/users tables identity-service
-// owns (see §4 of docs/architecture/implementation-plan.md). Every other
-// service treats these as opaque lookups behind the two internal endpoints
-// in main.go — nobody else runs SQL against these tables directly.
-
 import (
 	"context"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
-var errNotFound = errors.New("not found")
+var (
+	errNotFound        = errors.New("not found")
+	errInvalidPassword = errors.New("invalid password")
+)
 
 type org struct {
 	ID   string
@@ -39,22 +38,36 @@ func orgBySlug(ctx context.Context, pool *pgxpool.Pool, slug string) (org, error
 	return o, err
 }
 
-func userByAuthID(ctx context.Context, pool *pgxpool.Pool, authUserID string) (user, error) {
+func authenticateUser(ctx context.Context, pool *pgxpool.Pool, email, password string) (user, error) {
 	var u user
+	var hash string
 	err := pool.QueryRow(ctx,
-		`SELECT id, org_id, role, email FROM users WHERE auth_user_id = $1`, authUserID,
-	).Scan(&u.ID, &u.OrgID, &u.Role, &u.Email)
+		`SELECT id, org_id, role, email, password_hash FROM users WHERE email = $1`, email,
+	).Scan(&u.ID, &u.OrgID, &u.Role, &u.Email, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return user{}, errNotFound
 	}
-	return u, err
+	if err != nil {
+		return user{}, err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		return user{}, errInvalidPassword
+	}
+	return u, nil
 }
 
-// createOrganization provisions a brand new tenant plus its first OWNER user
-// in one transaction — the minimal "onboard a clinic" path referenced by
-// Phase 1 ("stand up identity-service: organizations, users, roles").
-// Invite-additional-user flows, self-serve billing, etc. are later phases.
-func createOrganization(ctx context.Context, pool *pgxpool.Pool, orgName, slug, ownerAuthUserID, ownerEmail string) (org, user, error) {
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(hash), err
+}
+
+// createOrganization provisions a new tenant plus its first OWNER user.
+func createOrganization(ctx context.Context, pool *pgxpool.Pool, orgName, slug, ownerPassword, ownerEmail string) (org, user, error) {
+	passwordHash, err := hashPassword(ownerPassword)
+	if err != nil {
+		return org{}, user{}, err
+	}
+
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return org{}, user{}, err
@@ -72,10 +85,10 @@ func createOrganization(ctx context.Context, pool *pgxpool.Pool, orgName, slug, 
 
 	var u user
 	err = tx.QueryRow(ctx,
-		`INSERT INTO users (org_id, auth_user_id, email, role)
+		`INSERT INTO users (org_id, email, password_hash, role)
 		 VALUES ($1, $2, $3, 'OWNER')
 		 RETURNING id, org_id, role, email`,
-		o.ID, ownerAuthUserID, ownerEmail,
+		o.ID, ownerEmail, passwordHash,
 	).Scan(&u.ID, &u.OrgID, &u.Role, &u.Email)
 	if err != nil {
 		return org{}, user{}, err
@@ -87,16 +100,20 @@ func createOrganization(ctx context.Context, pool *pgxpool.Pool, orgName, slug, 
 	return o, u, nil
 }
 
-// inviteUser adds a staff member to an existing org. Real invite-by-email
-// delivery is out of scope for Phase 1 — this just creates the membership
-// row once the admin has communicated credentials out of band.
-func inviteUser(ctx context.Context, pool *pgxpool.Pool, orgID, authUserID, email, role string) (user, error) {
+// inviteUser adds a staff member to an existing org with a set password —
+// real invite-by-email delivery is a later phase.
+func inviteUser(ctx context.Context, pool *pgxpool.Pool, orgID, email, password, role string) (user, error) {
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return user{}, err
+	}
+
 	var u user
-	err := pool.QueryRow(ctx,
-		`INSERT INTO users (org_id, auth_user_id, email, role)
+	err = pool.QueryRow(ctx,
+		`INSERT INTO users (org_id, email, password_hash, role)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id, org_id, role, email`,
-		orgID, authUserID, email, role,
+		orgID, email, passwordHash, role,
 	).Scan(&u.ID, &u.OrgID, &u.Role, &u.Email)
 	return u, err
 }

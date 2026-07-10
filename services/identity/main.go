@@ -1,13 +1,6 @@
-// Command identity is TriageOS's identity-service: owns organizations
-// (tenants), users, and roles, and is the only service that talks to the
-// `organizations`/`users` tables (Phase 1 of
-// docs/architecture/implementation-plan.md).
-//
-// It does not verify end-user JWTs itself — api-gateway does that against
-// Supabase Auth / the patient-session secret — identity-service only answers
-// "given this Supabase auth user id (or org slug), what tenant/role does it
-// map to?". Every route here is internal-only, gated by a shared secret the
-// gateway sends on every call.
+// Command identity is TriageOS's identity-service: owns organizations,
+// users, roles, and login (email + password_hash). Every route here is
+// internal-only, gated by a shared secret the gateway sends on every call.
 package main
 
 import (
@@ -51,9 +44,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth(pool))
 	mux.Handle("GET /internal/organizations/by-slug/{slug}", requireInternalSecret(secret, handleOrgBySlug(pool)))
-	mux.Handle("GET /internal/users/by-auth-id/{authUserID}", requireInternalSecret(secret, handleUserByAuthID(pool)))
 	mux.Handle("POST /internal/organizations", requireInternalSecret(secret, handleCreateOrganization(pool)))
 	mux.Handle("POST /internal/users", requireInternalSecret(secret, handleInviteUser(pool)))
+	mux.Handle("POST /internal/auth/login", requireInternalSecret(secret, handleLogin(pool)))
 
 	port := getenv("PORT", "8082")
 	log.Printf("identity-service listening on :%s", port)
@@ -98,41 +91,23 @@ func handleOrgBySlug(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-func handleUserByAuthID(pool *pgxpool.Pool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		authUserID := r.PathValue("authUserID")
-		u, err := userByAuthID(r.Context(), pool, authUserID)
-		if errors.Is(err, errNotFound) {
-			writeJSONError(w, http.StatusNotFound, "NOT_FOUND", "no membership for this account")
-			return
-		}
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "DB_ERROR", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{
-			"user_id": u.ID, "org_id": u.OrgID, "role": u.Role, "email": u.Email,
-		})
-	}
-}
-
 type createOrganizationRequest struct {
-	Name            string `json:"name"`
-	Slug            string `json:"slug"`
-	OwnerAuthUserID string `json:"owner_auth_user_id"`
-	OwnerEmail      string `json:"owner_email"`
+	Name          string `json:"name"`
+	Slug          string `json:"slug"`
+	OwnerPassword string `json:"owner_password"`
+	OwnerEmail    string `json:"owner_email"`
 }
 
 func handleCreateOrganization(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body createOrganizationRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-			body.Name == "" || body.Slug == "" || body.OwnerAuthUserID == "" || body.OwnerEmail == "" {
-			writeJSONError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name, slug, owner_auth_user_id, owner_email are required")
+			body.Name == "" || body.Slug == "" || body.OwnerPassword == "" || body.OwnerEmail == "" {
+			writeJSONError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name, slug, owner_password, owner_email are required")
 			return
 		}
 
-		o, u, err := createOrganization(r.Context(), pool, body.Name, body.Slug, body.OwnerAuthUserID, body.OwnerEmail)
+		o, u, err := createOrganization(r.Context(), pool, body.Name, body.Slug, body.OwnerPassword, body.OwnerEmail)
 		if err != nil {
 			writeJSONError(w, http.StatusConflict, "CREATE_FAILED", err.Error())
 			return
@@ -144,10 +119,10 @@ func handleCreateOrganization(pool *pgxpool.Pool) http.HandlerFunc {
 }
 
 type inviteUserRequest struct {
-	OrgID      string `json:"org_id"`
-	AuthUserID string `json:"auth_user_id"`
-	Email      string `json:"email"`
-	Role       string `json:"role"`
+	OrgID    string `json:"org_id"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
 }
 
 var validRoles = map[string]bool{"OWNER": true, "ADMIN": true, "NURSE": true, "DOCTOR": true}
@@ -156,17 +131,45 @@ func handleInviteUser(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body inviteUserRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-			body.OrgID == "" || body.AuthUserID == "" || body.Email == "" || !validRoles[body.Role] {
-			writeJSONError(w, http.StatusBadRequest, "VALIDATION_ERROR", "org_id, auth_user_id, email and a valid role are required")
+			body.OrgID == "" || body.Email == "" || body.Password == "" || !validRoles[body.Role] {
+			writeJSONError(w, http.StatusBadRequest, "VALIDATION_ERROR", "org_id, email, password and a valid role are required")
 			return
 		}
 
-		u, err := inviteUser(r.Context(), pool, body.OrgID, body.AuthUserID, body.Email, body.Role)
+		u, err := inviteUser(r.Context(), pool, body.OrgID, body.Email, body.Password, body.Role)
 		if err != nil {
 			writeJSONError(w, http.StatusConflict, "INVITE_FAILED", err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]string{"user_id": u.ID})
+	}
+}
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func handleLogin(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body loginRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" || body.Password == "" {
+			writeJSONError(w, http.StatusBadRequest, "VALIDATION_ERROR", "email and password are required")
+			return
+		}
+
+		u, err := authenticateUser(r.Context(), pool, body.Email, body.Password)
+		if errors.Is(err, errNotFound) || errors.Is(err, errInvalidPassword) {
+			writeJSONError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "DB_ERROR", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"user_id": u.ID, "org_id": u.OrgID, "role": u.Role, "email": u.Email,
+		})
 	}
 }
 

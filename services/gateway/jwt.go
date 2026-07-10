@@ -3,7 +3,7 @@ package main
 // Minimal HS256 JWT sign/verify.
 //
 // ponytail: hand-rolled instead of pulling in golang-jwt — we only ever need
-// HS256 sign+verify+exp-check for two token kinds (Supabase-issued staff
+// HS256 sign+verify+exp-check for two token kinds (self-issued staff
 // tokens, self-issued patient-session tokens). That's ~50 lines of stdlib
 // crypto/hmac + encoding/json, so a dependency isn't worth adding. If a
 // second algorithm (RS256/JWKS rotation) is ever needed, switch to
