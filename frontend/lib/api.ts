@@ -96,7 +96,7 @@ export interface PendingQueueResponse {
 }
 
 // No nurse_id field: the resolving nurse's identity comes from the staff
-// bearer token (see lib/supabase.ts signInStaff), never a client-set field.
+// bearer token (see lib/staffSession.ts signInStaff), never a client-set field.
 export interface ResolveRequest {
   queue_id: string;
   approved_dept: string;
@@ -172,7 +172,7 @@ export async function sendTriageMessage(
 }
 
 // ---------------------------------------------------------------------------
-// Nurse queue (requires a staff bearer token – see lib/supabase.ts)
+// Nurse queue (requires a staff bearer token – see lib/staffSession.ts)
 // ---------------------------------------------------------------------------
 
 /**

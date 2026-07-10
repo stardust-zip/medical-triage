@@ -743,14 +743,6 @@ export default function PatientChatPage() {
           </p>
         </div>
       </div>
-
-      {/* Link to nurse dashboard */}
-      <a
-        href="/dashboard"
-        className="mt-3 text-xs text-gray-400 hover:text-gray-600 underline transition-colors"
-      >
-        Màn hình Điều dưỡng →
-      </a>
     </div>
   );
 }

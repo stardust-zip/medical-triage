@@ -15,9 +15,8 @@ import {
   signInStaff,
   signOutStaff,
   getStaffSession,
-  onStaffAuthChange,
   type StaffSession,
-} from "@/lib/supabase";
+} from "@/lib/staffSession";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -298,15 +297,11 @@ function QueueRow({
 }
 
 // ---------------------------------------------------------------------------
-// Staff login gate
-//
-// Phase 1: the nurse queue is tenant + role scoped, so the dashboard now
-// requires a real Supabase Auth sign-in instead of a client-generated
-// "NURSE-XXXXXX" id — api-gateway verifies this token and resolves the
-// caller's org/role via identity-service (see services/gateway/auth.go).
+// Staff login gate — email + password against identity-service, tenant/role
+// scoped (see services/gateway/auth.go).
 // ---------------------------------------------------------------------------
 
-function StaffLoginForm() {
+function StaffLoginForm({ onSignedIn }: { onSignedIn: (session: StaffSession) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -317,9 +312,7 @@ function StaffLoginForm() {
     setSubmitting(true);
     setError(null);
     try {
-      // No local state update needed here – the dashboard's
-      // onStaffAuthChange listener picks up the new session automatically.
-      await signInStaff(email, password);
+      onSignedIn(await signInStaff(email, password));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");
     } finally {
@@ -389,15 +382,12 @@ export default function NurseDashboard() {
   const [authChecked, setAuthChecked] = useState(false);
 
   // ---------------------------------------------------------------------------
-  // Staff auth: resolve the current session once, then react to sign-in/out.
+  // Staff auth: read the cached session once on mount.
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    getStaffSession().then((session) => {
-      setStaffSession(session);
-      setAuthChecked(true);
-    });
-    return onStaffAuthChange(setStaffSession);
+    setStaffSession(getStaffSession());
+    setAuthChecked(true);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -571,7 +561,7 @@ export default function NurseDashboard() {
   }
 
   if (!staffSession) {
-    return <StaffLoginForm />;
+    return <StaffLoginForm onSignedIn={setStaffSession} />;
   }
 
   return (
@@ -640,7 +630,10 @@ export default function NurseDashboard() {
 
             {/* Sign out */}
             <button
-              onClick={() => signOutStaff()}
+              onClick={() => {
+                signOutStaff();
+                setStaffSession(null);
+              }}
               className="text-blue-200 hover:text-white border border-blue-500 hover:border-blue-300 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
             >
               Đăng xuất
